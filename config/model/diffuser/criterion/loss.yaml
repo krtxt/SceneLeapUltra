@@ -1,0 +1,183 @@
+# 通用配置
+mode: ${mode}
+device: 'cuda:0'
+rot_type: ${rot_type}         # 旋转表示: 'quat' 或 'r6d'
+
+# 手部模型
+hand_model:
+  n_surface_points: 1024
+  rot_type: ${rot_type}
+
+# # 损失函数
+# loss:
+#   weights:               # 各项损失的权重 (设为0则禁用)
+#     translation: 10.0
+#     rotation: 10.0
+#     qpos: 1.0
+#     neg_loss: 5.0
+#     hand_chamfer: 0.0
+# 损失函数
+loss_weights:               # 各项损失的权重 (设为0则禁用)
+  translation: 20.0
+  rotation: 20.0
+  qpos: 1.0
+  neg_loss: 0.0
+  hand_chamfer: 1.0
+
+use_negative_prompts: ${use_negative_prompts}
+
+multi_grasp:           # 多抓取损失配置
+  loss_aggregation: "mean"
+  use_consistency_loss: true
+  consistency_loss_weight: 0.1
+  diversity_loss_weight: 0.05
+
+# 匹配器
+# matcher:
+cost_weights:          # 用于匹配的代价权重
+  translation: 2.0
+  rotation: 2.0 
+  qpos: 1.0
+
+# 评估指标
+# metrics:
+scale: 0.1
+q1:                    # 抓取质量评估 (cal_q1) 所需参数
+  lambda_torque: 10
+  m: 8
+  mu: 1
+  nms: true
+  thres_contact: 0.01
+  thres_pen: 0.005
+  thres_tpen: 0.01
+  rot_type: ${rot_type}
+
+# hand_model:
+#   n_surface_points: 1024
+#   rot_type: ${rot_type}
+#   device: cuda:0
+# loss_weights:
+#   hand_chamfer: 0.0
+#   translation: 10.0
+#   rotation: 10.0
+#   qpos: 1.0
+#   neg_loss: 5.0  # 负向提示损失权重，设置为0则禁用
+#   # obj_penetration: 0.2
+#   # self_penetration: 0.5
+#   # distance: 1.0
+#   # cmap: 0.0001
+# cost_weights:
+#   hand_mesh: 0.0
+#   qpos: 1.0
+#   translation: 2.0
+#   rotation: 2.0
+# device: cuda:0
+# rot_type: ${rot_type}
+# mode: ${mode}
+
+# # 匹配器配置（验证和测试阶段）
+# matcher:
+#   multi_grasp_matching: true  # 启用多对多匹配
+
+#   # 成本权重配置（用于匹配算法）
+#   cost_weights:
+#     translation: 2.0  # 平移成本权重
+#     qpos: 1.0  # 关节角度成本权重
+#     rotation: 2.0  # 旋转成本权重
+#     hand_mesh: 0.0  # 手部网格成本权重（通常设为0）
+
+#   # 匹配算法配置
+#   algorithm:
+#     type: "hungarian"  # 匹配算法类型: hungarian, greedy
+#     max_assignments: null  # 最大分配数量，null表示无限制
+#     cost_threshold: 10.0  # 成本阈值，超过此值的匹配将被拒绝
+
+#   # 多对多匹配特定配置
+#   multi_to_multi:
+#     enable_partial_matching: true  # 允许部分匹配
+#     unmatched_penalty: 1.0  # 未匹配项的惩罚权重
+#     duplicate_penalty: 2.0  # 重复匹配的惩罚权重
+
+#   # 向后兼容配置
+#   backward_compatibility:
+#     support_single_grasp: true  # 支持单抓取模式
+#     auto_expand_dimensions: true  # 自动扩展维度以统一处理
+
+# # 多抓取损失配置
+# multi_grasp:
+#   loss_aggregation: "mean"  # mean, sum, weighted
+#   use_consistency_loss: true
+#   consistency_loss_weight: 0.1
+#   diversity_loss_weight: 0.05
+
+#   # 抓取质量加权配置
+#   use_quality_weighting: false  # 是否根据抓取质量加权损失
+#   quality_threshold: 0.5  # 质量阈值，低于此值的抓取权重降低
+#   min_weight: 0.1  # 最小权重值
+
+#   # 一致性损失详细配置
+#   consistency_loss:
+#     type: "spatial"  # spatial, semantic, both
+#     spatial_weight: 1.0  # 空间一致性权重
+#     semantic_weight: 0.5  # 语义一致性权重
+#     distance_threshold: 0.1  # 空间距离阈值
+
+#   # 多样性损失详细配置
+#   diversity_loss:
+#     type: "pairwise_distance"  # pairwise_distance, entropy, determinant
+#     min_distance: 0.05  # 最小期望距离
+#     distance_metric: "l2"  # l2, cosine
+#     normalize: true  # 是否归一化
+
+# # 评估指标配置
+# evaluation:
+#   compute_topk: [1, 3, 5]
+#   compute_diversity: true
+#   compute_coverage: false
+#   success_thresholds: [0.01, 0.05, 0.1]
+
+#   # 多抓取特定评估指标
+#   multi_grasp_metrics:
+#     compute_best_grasp: true  # 计算最佳抓取指标
+#     compute_worst_grasp: true  # 计算最差抓取指标
+#     compute_grasp_distribution: true  # 计算抓取分布指标
+#     diversity_metrics: ["mean_pairwise_distance", "entropy", "coverage_radius"]
+#     quality_metrics: ["success_rate", "stability_score", "reachability_score"]
+
+#   # 验证和测试阶段特定配置
+#   validation_test:
+#     # 匹配评估配置
+#     matching_evaluation:
+#       compute_matching_accuracy: true  # 计算匹配准确率
+#       compute_assignment_cost: true  # 计算分配成本
+#       log_unmatched_predictions: true  # 记录未匹配的预测
+#       log_unmatched_targets: true  # 记录未匹配的目标
+
+#     # 分布级评估配置
+#     distribution_evaluation:
+#       compute_coverage_metrics: true  # 计算覆盖度指标
+#       compute_diversity_scores: true  # 计算多样性分数
+#       compute_quality_distribution: true  # 计算质量分布
+#       spatial_clustering_threshold: 0.05  # 空间聚类阈值
+
+#     # 性能评估配置
+#     performance_evaluation:
+#       measure_inference_time: true  # 测量推理时间
+#       measure_memory_usage: true  # 测量内存使用
+#       compare_with_single_grasp: true  # 与单抓取模式对比
+
+#     # 输出配置
+#     output:
+#       save_detailed_results: false  # 保存详细结果
+#       save_visualization: false  # 保存可视化结果
+#       log_level: "INFO"  # 日志级别: DEBUG, INFO, WARNING, ERROR
+
+# q1:
+#   lambda_torque: 10
+#   m: 8
+#   mu: 1
+#   nms: true
+#   thres_contact: 0.01
+#   thres_pen: 0.005
+#   thres_tpen: 0.01
+#   rot_type: ${rot_type}

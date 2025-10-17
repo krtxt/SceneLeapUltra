@@ -1,0 +1,80 @@
+# 标准化验证损失配置示例
+# 此配置启用了标准化验证损失，用于公平的跨实验对比
+
+# 通用配置
+mode: ${mode}
+device: 'cuda:0'
+rot_type: ${rot_type}         # 旋转表示: 'quat' 或 'r6d'
+
+# 手部模型
+hand_model:
+  n_surface_points: 1024
+  rot_type: ${rot_type}
+
+# 训练损失函数权重 (用于梯度更新)
+# 这些权重可以根据具体实验需求调整
+loss_weights:               
+  translation: 20.0
+  rotation: 20.0
+  qpos: 1.0
+  neg_loss: 0.0
+  hand_chamfer: 1.0
+
+# 标准化验证损失配置 (用于模型选择和跨实验对比)
+# 这些设置应该在所有实验中保持一致，以确保公平对比
+standardized_validation_loss:
+  enabled: true             # 启用标准化验证损失
+  
+  # 固定权重 - 基于领域知识和重要性设定
+  weights:
+    translation: 10.0       # 位置精度 - 最重要的指标
+    rotation: 10.0          # 旋转精度 - 同样重要
+    qpos: 5.0              # 关节配置 - 中等重要性
+    hand_chamfer: 2.0      # 手部几何一致性 - 较低权重但仍重要
+    neg_loss: 0.0          # 负样本损失 - 验证时通常不使用
+  
+  # 标准化处理配置
+  normalization:
+    normalize_by_num_grasps: true    # 按抓取数量归一化，确保不同num_grasps可比
+    normalize_by_batch_size: true    # 按批次大小归一化，确保不同batch_size可比
+    use_sample_level_mean: true      # 使用样本级别平均，提高稳定性
+  
+  # 固定聚合策略
+  aggregation:
+    strategy: "mean"                 # 固定使用均值聚合，最稳定的策略
+    ignore_invalid_grasps: true      # 忽略无效抓取，避免异常值影响
+  
+  # 质量增强指标 (可选，用于更细致的质量评估)
+  quality_metrics:
+    include_penetration_penalty: false    # 穿透惩罚 - 可根据需要启用
+    include_contact_quality: false        # 接触质量 - 可根据需要启用
+    penetration_weight: 1.0               # 穿透惩罚权重
+    contact_weight: 0.5                   # 接触质量权重
+
+use_negative_prompts: ${use_negative_prompts}
+
+# 多抓取损失配置 (影响训练损失)
+multi_grasp:           
+  loss_aggregation: "mean"
+  use_consistency_loss: true
+  consistency_loss_weight: 0.1
+  diversity_loss_weight: 0.05
+
+# 匹配器配置
+cost_weights:          
+  translation: 2.0
+  rotation: 2.0
+  qpos: 1.0
+
+# 其他配置保持不变...
+scale: 0.1
+
+q1:
+  lambda_torque: 10
+  m: 8
+  mu: 1
+  nms: true
+  thres_contact: 0.01
+  thres_pen: 0.005
+  thres_tpen: 0.01
+  rot_type: ${rot_type}

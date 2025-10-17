@@ -1,0 +1,68 @@
+# WandB配置
+#
+# 此配置文件包含所有与Weights & Biases日志记录相关的设置
+# 支持实验跟踪、可视化和系统监控
+
+# 是否启用wandb日志记录
+enabled: True
+
+# 项目名称
+project: "scene-leap-plus-diffusion-grasp"
+
+# 实验名称 (如果为null，将自动生成)
+name: null
+
+# 实验组名 (用于组织相关实验)
+group: null
+
+# 实验标签
+tags:
+  - "diffusion"
+  - "grasp-generation"
+  - "hand-pose"
+  - "scene-leap-plus"
+
+# 实验备注
+notes: "Scene Leap Plus diffusion model training for grasp generation"
+
+# 是否保存模型到wandb (建议false以节省流量)
+save_model: false
+
+# 是否监控系统资源 (可选，会增加少量流量)
+monitor_system: false
+
+# 日志记录频率 (steps) - 增大以减少流量
+log_freq: 100
+
+# 是否在分布式训练中只在主进程记录
+log_only_main_process: true
+
+# 流量优化配置
+optimization:
+  # 是否启用可视化 (图片上传消耗较多流量)
+  enable_visualization: false
+  # 可视化频率 (epoch) - 如果启用，建议设大一些
+  visualization_freq: 20
+  # 是否记录参数直方图 (消耗较多流量)
+  log_histograms: false
+  # 直方图记录频率 (epoch)
+  histogram_freq: 50
+  # 是否记录梯度信息
+  log_gradients: false
+  # 梯度记录频率 (steps)
+  gradient_freq: 1000
+  # 系统资源记录频率 (steps)
+  system_freq: 500
+
+  monitor_system: false
+
+# 实验管理配置
+experiment:
+  # 是否自动生成实验描述
+  auto_description: true
+  # 是否记录代码变更 (一次性，流量很小)
+  log_code_changes: false
+  # 是否记录环境信息 (一次性，流量很小)
+  log_environment: true
+  # 是否记录数据集信息 (一次性，流量很小)
+  log_dataset_info: false

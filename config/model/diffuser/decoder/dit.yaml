@@ -1,0 +1,95 @@
+# DiT (Diffusion Transformer) Decoder Configuration
+name: dit
+rot_type: ${rot_type}
+
+# Core architecture parameters
+d_model: 512
+num_layers: 12
+num_heads: 8
+d_head: 64
+dropout: 0.1
+
+# Positional encoding settings
+max_sequence_length: 100
+use_learnable_pos_embedding: false
+
+# Timestep embedding settings
+time_embed_dim: 1024
+time_embed_mult: 4
+
+# Conditioning settings
+use_adaptive_norm: true
+use_text_condition: true
+text_dropout_prob: 0.01
+use_negative_prompts: ${use_negative_prompts}
+use_object_mask: ${use_object_mask}
+
+# Attention settings
+attention_dropout: 0.1
+cross_attention_dropout: 0.1
+
+# Feed-forward settings
+ff_mult: 4
+ff_dropout: 0.1
+
+# Backbone settings (reuse from UNet for compatibility)
+backbone:
+  name: pointnet2
+  use_pooling: false
+  layer1:
+    npoint: 2048
+    radius_list:
+    - 0.04
+    nsample_list:
+    - 64
+    mlp_list:
+    - 4  # RGB特征是3通道 (xyz坐标会自动处理，这里指定RGB特征的通道数)
+    - 64
+    - 64
+    - 128
+  layer2:
+    npoint: 1024
+    radius_list:
+    - 0.1
+    nsample_list:
+    - 32
+    mlp_list:
+    - 128
+    - 128
+    - 128
+    - 256
+  layer3:
+    npoint: 512
+    radius_list:
+    - 0.2
+    nsample_list:
+    - 32
+    mlp_list:
+    - 256
+    - 128
+    - 128
+    - 256
+  layer4:
+    npoint: 128  # 修改为128个点，作为交叉注意力的Key/Value
+    radius_list:
+    - 0.3
+    nsample_list:
+    - 16
+    mlp_list:
+    - 256
+    - 512
+    - 512
+  use_xyz: true
+  normalize_xyz: true
+
+# Memory optimization settings
+gradient_checkpointing: false  # Auto-enabled for large models
+use_flash_attention: false     # Enable if flash-attn is available
+attention_chunk_size: 512      # Chunk size for memory-efficient attention
+memory_monitoring: false       # Enable memory usage monitoring (disabled by default for cleaner logs)
+max_batch_size: 32            # Maximum batch size for memory management
+
+# Advanced optimization settings
+enable_memory_efficient_attention: true
+use_gradient_accumulation: false
+memory_fraction: 0.9          # Fraction of GPU memory to use

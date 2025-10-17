@@ -1,0 +1,14 @@
+data/
+experiments/
+assets/
+notebooks/
+outputs/
+.idea/
+.kiro/
+.vscode/
+.pytest_cache/
+lightning_logs/
+assets/
+third_party/
+__pycache__/
+*.pyc

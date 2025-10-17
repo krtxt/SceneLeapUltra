@@ -1,0 +1,44 @@
+# UNet Decoder Configuration (Cleaned Version)
+# 移除了所有未使用的配置项
+
+defaults:
+  - backbone: pointnet2
+  # - backbone: ptv3_light
+
+name: unet
+rot_type: ${rot_type}
+
+# Network architecture
+d_model: 512
+time_embed_mult: 2
+nblocks: 4
+resblock_dropout: 0.0
+
+# Transformer settings
+transformer_num_heads: 8
+transformer_dim_head: 64
+transformer_dropout: 0.1
+transformer_depth: 1
+transformer_mult_ff: 2
+context_dim: 512
+
+# Backbone settings
+# 通过defaults引用，可以通过以下方式切换：
+# defaults:
+#   - backbone: ptv3  # 切换到PTv3
+#
+# 如需覆盖backbone参数，可以在此处添加：
+# backbone:
+#   use_pooling: true  # 覆盖默认设置
+
+# Other settings
+use_position_embedding: false
+# fix_num_grasps: ${fix_num_grasps}
+# target_num_grasps: ${target_num_grasps}
+
+# Text condition settings
+use_text_condition: true
+text_dropout_prob: 0.01  # 文本条件随机丢弃概率
+use_negative_prompts: ${use_negative_prompts}
+use_object_mask: ${use_object_mask}
+# use_object_mask: true

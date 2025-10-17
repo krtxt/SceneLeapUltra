@@ -1,0 +1,43 @@
+name: prosceneleap
+mode: ${mode}
+train:
+  root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/test_final_test_520_1_processed
+  succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/succ_collect
+  obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
+  mode: ${mode}
+  max_grasps_per_object: 16
+  mesh_scale: 0.1
+  num_neg_prompts: 4
+  enable_cropping: true
+  max_points: 10000
+  cache_version: v2.0_train_only
+  batch_size: ${batch_size}
+  num_workers: 16
+val:
+  root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/723_sub_15
+  succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/succ_collect
+  obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
+  mode: ${mode}
+  max_grasps_per_object: 1024
+  mesh_scale: 0.1
+  num_neg_prompts: 4
+  enable_cropping: true
+  max_points: 10000
+  cache_version: v1.0_formatch
+  cache_mode: val
+  batch_size: ${batch_size}
+  num_workers: 16
+test:
+  root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/723_sub_15
+  succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/succ_collect
+  obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
+  mode: ${mode}
+  max_grasps_per_object: 1024
+  mesh_scale: 0.1
+  num_neg_prompts: 4
+  enable_cropping: true
+  max_points: 10000
+  cache_version: v1.0_formatch
+  cache_mode: test
+  batch_size: ${batch_size}
+  num_workers: 16

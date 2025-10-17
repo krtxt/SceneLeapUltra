@@ -1,0 +1,53 @@
+# PTv3 (Point Transformer V3) Backbone Configuration - 无Flash Attention版本
+# 适用于不支持Flash Attention的环境或需要兼容性的场景
+
+name: ptv3
+use_pooling: false      # 不使用全局池化，保持点级特征用于后续处理
+grid_size: 0.02         # 体素化网格大小，用于稀疏化处理
+in_channels: 6          # 输入通道数: xyz(3维) + rgb(3维)
+max_context_points: 512 # 新增：限制传给UNet的上下文点上限，避免注意力OOM
+
+# 序列化和处理顺序
+order:
+  - "z"                 # Z轴序列化
+sampling_strategy: random   # random | fps
+
+  - "z-trans"           # Z轴转置序列化
+
+# 编码器配置
+stride: [2, 2, 2, 2]    # 各层的下采样步长
+enc_depths: [2, 2, 2, 6, 2]        # 各层的Transformer块数量
+enc_channels: [32, 64, 128, 256, 512]  # 各层的特征通道数
+enc_num_head: [2, 4, 8, 16, 32]    # 各层的注意力头数
+enc_patch_size: [1024, 1024, 1024, 1024, 1024]  # 各层的patch大小
+
+# 解码器配置
+dec_depths: [2, 2, 2, 2]           # 解码器各层的Transformer块数量
+dec_channels: [64, 64, 128, 256]   # 解码器各层的特征通道数
+dec_num_head: [4, 4, 8, 16]        # 各层的注意力头数
+dec_patch_size: [1024, 1024, 1024, 1024]  # 各层的patch大小
+
+# Transformer配置
+mlp_ratio: 4            # MLP扩展比例
+qkv_bias: true          # 是否在QKV线性层中使用偏置
+attn_drop: 0.0          # 注意力dropout概率
+proj_drop: 0.0          # 投影层dropout概率
+drop_path: 0.1          # DropPath概率，用于随机深度
+
+# Flash Attention配置 - 禁用
+enable_flash_attn: false # 禁用Flash Attention（兼容性模式）
+flash_attn_version: 2    # Flash Attention版本（虽然禁用，但保留配置）
+
+# 训练和推理设置
+shuffle_orders: false   # 是否随机化序列化顺序（推理时建议关闭）
+
+# 配置说明:
+# 此配置适用于以下场景:
+# 1. 不支持Flash Attention的GPU (如较老的显卡)
+# 2. 需要最大兼容性的部署环境
+# 3. 调试和开发阶段
+#
+# 性能影响:
+# - 推理时间会比启用Flash Attention版本慢约30%
+# - 内存占用会稍高
+# - 但兼容性更好，适合更多硬件环境

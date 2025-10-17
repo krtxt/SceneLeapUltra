@@ -1,0 +1,46 @@
+# UNet Decoder Configuration with Backbone Reference
+# 展示如何使用独立的backbone配置文件
+
+name: unet
+rot_type: ${rot_type}
+
+# Network architecture
+d_model: 512
+time_embed_mult: 2
+nblocks: 4
+resblock_dropout: 0.0
+
+# Transformer settings
+transformer_num_heads: 8
+transformer_dim_head: 64
+transformer_dropout: 0.1
+transformer_depth: 1
+transformer_mult_ff: 2
+context_dim: 512
+
+# Backbone settings - 引用独立的backbone配置
+# 方式1: 直接引用配置文件 (推荐)
+backbone: ${oc.create:config/model/diffuser/decoder/backbone/pointnet2.yaml}
+
+# 方式2: 如果需要覆盖某些参数
+# backbone:
+#   ${oc.create:config/model/diffuser/decoder/backbone/pointnet2.yaml}
+#   use_pooling: true  # 覆盖默认的false设置
+
+# 方式3: 切换到PTv3 backbone
+# backbone: ${oc.create:config/model/diffuser/decoder/backbone/ptv3.yaml}
+
+# Other settings
+use_position_embedding: false
+
+# Text condition settings
+use_text_condition: true
+text_dropout_prob: 0.01
+use_negative_prompts: ${use_negative_prompts}
+use_object_mask: ${use_object_mask}
+
+# 使用说明:
+# 1. 默认使用PointNet2 backbone
+# 2. 如需切换到PTv3，修改第22行的引用路径
+# 3. 如需调整backbone参数，可以在引用后添加覆盖配置
+# 4. backbone配置会自动处理6维输入 (xyz + rgb)
