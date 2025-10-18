@@ -456,9 +456,16 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
         Also keep the original special handling for `score_heads`.
         """
         # 1) Make sure the text encoder is constructed so its parameters are present
+        # Only initialize if text conditioning is enabled
         try:
-            if hasattr(self, 'eps_model') and hasattr(self.eps_model, '_ensure_text_encoder'):
+            if (hasattr(self, 'eps_model') and 
+                hasattr(self.eps_model, '_ensure_text_encoder') and
+                hasattr(self.eps_model, 'use_text_condition') and
+                self.eps_model.use_text_condition):
                 self.eps_model._ensure_text_encoder()
+                logging.info("Text encoder initialized for checkpoint loading")
+            elif hasattr(self, 'eps_model') and hasattr(self.eps_model, 'use_text_condition'):
+                logging.info(f"Skipping text encoder initialization (use_text_condition={self.eps_model.use_text_condition})")
         except Exception as e:
             logging.warning(f"Failed to ensure text encoder before loading checkpoint: {e}")
 

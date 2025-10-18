@@ -6,18 +6,19 @@ defaults:
   - wandb: default
 
 epochs: 500
-resume: False
-save_root: &save_root ./experiments/exp
+resume: false
+save_root: &save_root ./experiments/exp_with_text
 save_top_n: 5
 seed: 42
 rot_type: &rot_type r6d
 mode: &mode camera_centric_scene_mean_normalized
 batch_size: &batch_size 96
-use_negative_prompts: &use_negative_prompts False
+use_negative_prompts: &use_negative_prompts false
 target_num_grasps: &target_num_grasps 64
-fix_num_grasps: &fix_num_grasps True
-use_object_mask: &use_object_mask True
-use_rgb: &use_rgb False
+fix_num_grasps: &fix_num_grasps true
+use_object_mask: &use_object_mask true
+use_text_condition: &use_text_condition true
+use_rgb: &use_rgb false
 exhaustive_sampling_strategy: &exhaustive_sampling_strategy interleaved
 
 checkpoint_path: ???
@@ -31,18 +32,18 @@ trainer:
   check_val_every_n_epoch: 5
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  benchmark: True
+  benchmark: true
   log_every_n_steps: 20
-  sync_batchnorm: False
-  find_unused_parameters: True
+  sync_batchnorm: false
+  find_unused_parameters: true
 
 hydra:
   output_subdir: null
   job:
-    chdir: False
+    chdir: false
   hydra_logging:
     version: 1
-    disable_existing_loggers: True
+    disable_existing_loggers: true
   job_logging:
     version: 1
-    disable_existing_loggers: True
+    disable_existing_loggers: true
