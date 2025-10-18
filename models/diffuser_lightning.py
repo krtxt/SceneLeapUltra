@@ -280,13 +280,13 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             self.log('val_loss', avg_loss, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
 
         # Log additional validation info (common for both modes)
-        self.log('val/epoch', float(self.current_epoch), prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size)
-        self.log('val/num_batches', float(len(self.validation_step_outputs)), prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size)
+        self.log('val/epoch', float(self.current_epoch), prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
+        self.log('val/num_batches', float(len(self.validation_step_outputs)), prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
 
         # Log current learning rate if scheduler exists
         if hasattr(self, 'lr_schedulers') and self.lr_schedulers():
             current_lr = self.lr_schedulers().get_last_lr()[0] if hasattr(self.lr_schedulers(), 'get_last_lr') else self.optimizers().param_groups[0]['lr']
-            self.log('val/lr', current_lr, prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size)
+            self.log('val/lr', current_lr, prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
 
         self.validation_step_outputs.clear()
 

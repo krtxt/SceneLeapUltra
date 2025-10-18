@@ -4,3 +4,4 @@ hidden_dim: 128
 output_dim: 28
 dropout_prob: 0.1
 rot_type: ${rot_type}
+                                                                                                                                                                            

@@ -35,7 +35,7 @@ def validate_dit_config(cfg: DictConfig) -> bool:
             'dropout', 'max_sequence_length', 'use_learnable_pos_embedding',
             'time_embed_dim', 'time_embed_mult', 'use_adaptive_norm',
             'use_text_condition', 'text_dropout_prob', 'use_negative_prompts',
-            'use_object_mask', 'attention_dropout', 'cross_attention_dropout',
+            'use_object_mask', 'use_rgb', 'attention_dropout', 'cross_attention_dropout',
             'ff_mult', 'ff_dropout', 'gradient_checkpointing', 'use_flash_attention'
         ]
         
@@ -125,7 +125,7 @@ def validate_dit_config(cfg: DictConfig) -> bool:
         # Validate boolean parameters
         boolean_params = [
             'use_learnable_pos_embedding', 'use_adaptive_norm', 'use_text_condition',
-            'use_negative_prompts', 'use_object_mask', 'gradient_checkpointing',
+            'use_negative_prompts', 'use_object_mask', 'use_rgb', 'gradient_checkpointing',
             'use_flash_attention'
         ]
         
@@ -257,6 +257,15 @@ def validate_dit_compatibility_with_diffuser(dit_cfg: DictConfig, diffuser_cfg: 
                 f"Using DiT setting."
             )
     
+    # Check use_rgb consistency
+    if hasattr(diffuser_cfg, 'use_rgb'):
+        if dit_cfg.use_rgb != diffuser_cfg.use_rgb:
+            logging.warning(
+                f"DiT use_rgb ({dit_cfg.use_rgb}) differs from "
+                f"diffuser use_rgb ({diffuser_cfg.use_rgb}). "
+                f"Using DiT setting."
+            )
+    
     logging.info("DiT-Diffuser compatibility validation passed")
     return True
 
@@ -285,6 +294,7 @@ def get_dit_config_summary(cfg: DictConfig) -> Dict[str, Any]:
             'use_text_condition': cfg.use_text_condition,
             'use_negative_prompts': cfg.use_negative_prompts,
             'use_object_mask': cfg.use_object_mask,
+            'use_rgb': cfg.use_rgb,
             'text_dropout_prob': cfg.text_dropout_prob
         },
         'optimization': {

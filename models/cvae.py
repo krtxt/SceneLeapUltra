@@ -92,7 +92,7 @@ class GraspCVAELightning(pl.LightningModule):
         loss_dict = self.criterion(pred_dict, batch, mode='train')
         loss = sum(v * self.loss_weights[k] for k, v in loss_dict.items() if k in self.loss_weights)
 
-        self.log("train/total_loss", loss, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch["scene_pc"].shape[0])
+        self.log("train/total_loss", loss, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch["scene_pc"].shape[0], sync_dist=True)
         self.log("train/lr", self.optimizers().param_groups[0]['lr'], prog_bar=False, logger=True, on_step=True, on_epoch=False, batch_size=batch["scene_pc"].shape[0])
 
         # 定义希望在进度条上显示的关键指标
@@ -101,7 +101,7 @@ class GraspCVAELightning(pl.LightningModule):
 
         for k, v_val in loss_dict.items():
             show_on_prog_bar = k in prog_bar_keys
-            self.log(f"train/{k}", v_val, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch["scene_pc"].shape[0])
+            self.log(f"train/{k}", v_val, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=batch["scene_pc"].shape[0], sync_dist=True)
 
         if batch_idx % self.print_freq == 0:
             empty_formatter = logging.Formatter('')

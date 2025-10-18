@@ -5,9 +5,6 @@ defaults:
   - _self_
 
 name: GraspCVAE
-# latent_dim: &latent_dim 64
-# encoder_out: &encoder_out 512
-# condition_out: &condition_out 512
 rot_type: ${rot_type}
 mode: ${mode}
 batch_size: ${batch_size}

@@ -3,6 +3,8 @@ import torch.nn as nn
 import logging
 from typing import Dict
 from einops import rearrange
+import logging
+
 
 from models.utils.diffusion_utils import (
     timestep_embedding,
@@ -48,8 +50,8 @@ class UNetModel(nn.Module):
         self.context_dim = cfg.context_dim
 
         # Conditioning Modules
-        # Adjust backbone config based on use_object_mask
-        backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_object_mask)
+        # Adjust backbone config based on use_rgb and use_object_mask
+        backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
         self.scene_model = build_backbone(backbone_cfg)
         self.text_encoder = None  # Lazily initialized
         self.text_processor = TextConditionProcessor(
@@ -65,18 +67,20 @@ class UNetModel(nn.Module):
         self.text_dropout_prob = cfg.text_dropout_prob
         self.use_negative_prompts = getattr(cfg, 'use_negative_prompts', True)
         self.use_object_mask = cfg.use_object_mask
+        self.use_rgb = cfg.use_rgb
 
         # Note: Grasp count control is handled in diffusion core, not here
 
         self._build_model_layers(cfg)
 
-    def _adjust_backbone_config(self, backbone_cfg, use_object_mask):
+    def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
         """
-        Adjusts the backbone configuration based on use_object_mask setting.
+        Adjusts the backbone configuration based on use_rgb and use_object_mask settings.
         Supports both PointNet2 and PTv3 backbones.
 
         Args:
             backbone_cfg: Original backbone configuration
+            use_rgb: Whether to use RGB features as input
             use_object_mask: Whether to use object mask as additional input
 
         Returns:
@@ -87,10 +91,11 @@ class UNetModel(nn.Module):
 
         # Calculate total input dimension:
         # - XYZ coordinates: 3 channels (handled automatically by PointNet2, explicitly by PTv3)
-        # - RGB features: 3 channels
+        # - RGB features: 3 channels (if use_rgb is True)
         # - Object mask (if enabled): +1 channel
-        total_input_dim = 6 + (1 if use_object_mask else 0)  # xyz + rgb + optional mask
-        feature_input_dim = 3 + (1 if use_object_mask else 0)  # rgb + optional mask (for PointNet2)
+        # Input order: xyz + rgb + object_mask
+        total_input_dim = 3 + (3 if use_rgb else 0) + (1 if use_object_mask else 0)
+        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)  # rgb + optional mask (for PointNet2)
 
         backbone_name = getattr(adjusted_cfg, 'name', '').lower()
 
@@ -101,13 +106,13 @@ class UNetModel(nn.Module):
                 hasattr(adjusted_cfg.layer1, 'mlp_list') and
                 len(adjusted_cfg.layer1.mlp_list) > 0):
                 mlp_list = list(adjusted_cfg.layer1.mlp_list)
-                mlp_list[0] = feature_input_dim  # RGB + optional mask
+                mlp_list[0] = feature_input_dim  # RGB (optional) + optional mask
                 adjusted_cfg.layer1.mlp_list = mlp_list
 
         elif backbone_name == 'ptv3':
             # For PTv3: adjust the in_channels parameter
             # PTv3 expects the total input dimension including xyz coordinates
-            adjusted_cfg.in_channels = total_input_dim  # xyz + rgb + optional mask
+            adjusted_cfg.in_channels = total_input_dim  # xyz + rgb (optional) + optional mask
 
         return adjusted_cfg
 
@@ -256,13 +261,20 @@ class UNetModel(nn.Module):
             A dictionary with processed "scene_cond" and "text_cond".
         """
         # 1. Scene Feature Extraction
+        # Get scene point cloud and handle RGB inclusion
+        scene_pc = data['scene_pc'].to(torch.float32)  # (B, N, 6) - xyz + rgb
+        if not self.use_rgb:
+            scene_pc = scene_pc[..., :3]  # Keep only xyz
+        
         # Handle object mask inclusion in scene point cloud
         if self.use_object_mask and 'object_mask' in data:
-            scene_pc = data['scene_pc'].to(torch.float32)
             object_mask = data['object_mask'].to(torch.float32).unsqueeze(-1)
             pos = torch.cat([scene_pc, object_mask], dim=-1)
         else:
-            pos = data['scene_pc'].to(torch.float32)
+            pos = scene_pc
+        
+        # Log the final point cloud shape and configuration
+        # logging.info(f"Scene point cloud - Shape: {pos.shape}, use_rgb: {self.use_rgb}, use_object_mask: {self.use_object_mask}")
         
         _, scene_feat = self.scene_model(pos)
         scene_feat = scene_feat.permute(0, 2, 1).contiguous()  # (B, N, C)

@@ -2,24 +2,24 @@ hand_model:
   n_surface_points: 1024
   rot_type: ${rot_type}
   device: cuda:0
+
 loss_weights:
   hand_chamfer: 1.0
   translation: 10.0
   rotation: 2.0
   qpos: 2.0
   latent: 100.0
-  # obj_penetration: 1.0
-  # self_penetration: 1.0
-  # distance: 1.0
-  # cmap: 0.0001  
+
 cost_weights:
   hand_mesh: 0.0
   qpos: 1.0
   translation: 2.0
   rotation: 2.0
+
 device: cuda:0
-rot_type: ${rot_type} 
+rot_type: ${rot_type}
 mode: ${mode}
+
 q1:
   lambda_torque: 10
   m: 8
@@ -28,4 +28,4 @@ q1:
   thres_contact: 0.01
   thres_pen: 0.005
   thres_tpen: 0.01
-  rot_type: ${rot_type} 
+  rot_type: ${rot_type}

@@ -1,40 +1,12 @@
-# 分布式训练配置
-# 
-# 此配置文件包含所有与分布式训练相关的设置
-# 支持单GPU、多GPU和多节点训练场景
-
-# 是否启用分布式训练 (auto: 自动检测, true: 强制启用, false: 禁用)
 enabled: auto
-
-# 分布式策略 (ddp, fsdp, ddp_sharded)
 strategy: ddp
-
-# 通信后端 (nccl, gloo, mpi)
 backend: nccl
-
-# GPU设备配置 (auto: 自动检测所有可用GPU, 数字: 指定GPU数量, 列表: 指定具体GPU)
 devices: auto
-
-# 节点数量 (多机训练)
 num_nodes: 1
-
-# 是否启用混合精度训练
 precision: 32
-
-# 梯度累积步数 (用于模拟更大的批次大小)
 accumulate_grad_batches: 1
-
-# 分布式训练超时时间 (秒)
 timeout: 1800
-
-# 是否在分布式训练失败时回退到单GPU
 fallback_to_single_gpu: true
-
-# 是否同步批归一化层
 sync_batchnorm: true
-
-# 查找未使用参数 (对于复杂模型架构)
 find_unused_parameters: true
-
-# 学习率缩放方法 (none: 不缩放, linear: 线性缩放, sqrt: 平方根缩放)
 lr_scaling: sqrt

@@ -1,68 +1,52 @@
-# PointNet2 Backbone Configuration
-# 适用于6维点云数据 (XYZ + RGB)
-# 基于当前项目中验证的配置参数
-
 name: pointnet2
-use_pooling: false  # 不使用全局池化，保持点级特征用于后续处理
+use_pooling: false
 
-# Layer 1: 第一层采样和特征提取
 layer1:
-  npoint: 2048      # 从输入点云中采样2048个点
+  npoint: 2048
   radius_list:
-    - 0.04          # 邻域搜索半径
+    - 0.04
   nsample_list:
-    - 64            # 每个邻域最多采样64个点
+    - 64
   mlp_list:
-    - 3             # RGB特征通道数 (xyz坐标会在use_xyz=true时自动处理)
-    - 64            # 第一层MLP输出64维
-    - 64            # 第二层MLP输出64维
-    - 128           # 第三层MLP输出128维
+    - 3
+    - 64
+    - 64
+    - 128
 
-# Layer 2: 第二层采样和特征提取
 layer2:
-  npoint: 1024      # 从第一层的2048个点中采样1024个点
+  npoint: 1024
   radius_list:
-    - 0.1           # 增大邻域搜索半径
+    - 0.1
   nsample_list:
-    - 32            # 每个邻域最多采样32个点
+    - 32
   mlp_list:
-    - 128           # 输入特征维度（来自layer1）
-    - 128           # 第一层MLP输出128维
-    - 128           # 第二层MLP输出128维
-    - 256           # 第三层MLP输出256维
+    - 128
+    - 128
+    - 128
+    - 256
 
-# Layer 3: 第三层采样和特征提取
 layer3:
-  npoint: 512       # 从第二层的1024个点中采样512个点
+  npoint: 512
   radius_list:
-    - 0.2           # 进一步增大邻域搜索半径
+    - 0.2
   nsample_list:
-    - 32            # 每个邻域最多采样32个点
+    - 32
   mlp_list:
-    - 256           # 输入特征维度（来自layer2）
-    - 128           # 第一层MLP输出128维
-    - 128           # 第二层MLP输出128维
-    - 256           # 第三层MLP输出256维
+    - 256
+    - 128
+    - 128
+    - 256
 
-# Layer 4: 第四层采样和特征提取
 layer4:
-  npoint: 128       # 从第三层的512个点中采样128个点，作为交叉注意力的Key/Value
+  npoint: 128
   radius_list:
-    - 0.3           # 最大邻域搜索半径
+    - 0.3
   nsample_list:
-    - 16            # 每个邻域最多采样16个点
+    - 16
   mlp_list:
-    - 256           # 输入特征维度（来自layer3）
-    - 512           # 第一层MLP输出512维
-    - 512           # 第二层MLP输出512维
+    - 256
+    - 512
+    - 512
 
-# 全局设置
-use_xyz: true           # 使用xyz坐标信息，会自动将xyz坐标添加到特征中
-normalize_xyz: true     # 对xyz坐标进行归一化处理
-
-# 配置说明:
-# 1. 输入: [B, N, 6] - xyz(3维) + rgb(3维)
-# 2. 输出: xyz [B, 128, 3], features [B, 512, 128]
-# 3. 层级结构: N -> 2048 -> 1024 -> 512 -> 128
-# 4. 特征维度: 3 -> 128 -> 256 -> 256 -> 512
-# 5. 适用于需要保持空间结构的任务，如抓取姿态生成
+use_xyz: true
+normalize_xyz: true

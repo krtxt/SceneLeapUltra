@@ -299,6 +299,7 @@ class DiTModel(nn.Module):
         self.text_dropout_prob = cfg.text_dropout_prob
         self.use_negative_prompts = getattr(cfg, 'use_negative_prompts', True)
         self.use_object_mask = cfg.use_object_mask
+        self.use_rgb = cfg.use_rgb
         
         # Memory optimization config
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
@@ -366,7 +367,9 @@ class DiTModel(nn.Module):
         self.output_projection = OutputProjection(self.d_model, self.d_x)
         
         # Conditioning modules (reuse from UNet)
-        self.scene_model = build_backbone(cfg.backbone)
+        # Adjust backbone config based on use_rgb and use_object_mask
+        backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
+        self.scene_model = build_backbone(backbone_cfg)
         
         # Scene feature projection to match model dimension
         # The backbone typically outputs 512-dim features, project to d_model
@@ -395,6 +398,49 @@ class DiTModel(nn.Module):
                     nn.init.ones_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
+    
+    def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
+        """
+        Adjusts the backbone configuration based on use_rgb and use_object_mask settings.
+        Supports both PointNet2 and PTv3 backbones.
+
+        Args:
+            backbone_cfg: Original backbone configuration
+            use_rgb: Whether to use RGB features as input
+            use_object_mask: Whether to use object mask as additional input
+
+        Returns:
+            Modified backbone configuration with correct input dimensions
+        """
+        import copy
+        adjusted_cfg = copy.deepcopy(backbone_cfg)
+
+        # Calculate total input dimension:
+        # - XYZ coordinates: 3 channels (handled automatically by PointNet2, explicitly by PTv3)
+        # - RGB features: 3 channels (if use_rgb is True)
+        # - Object mask (if enabled): +1 channel
+        # Input order: xyz + rgb + object_mask
+        total_input_dim = 3 + (3 if use_rgb else 0) + (1 if use_object_mask else 0)
+        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)  # rgb + optional mask (for PointNet2)
+
+        backbone_name = getattr(adjusted_cfg, 'name', '').lower()
+
+        if backbone_name == 'pointnet2':
+            # For PointNet2: adjust the first layer's mlp_list first parameter
+            # PointNet2 automatically handles xyz coordinates when use_xyz=True
+            if (hasattr(adjusted_cfg, 'layer1') and
+                hasattr(adjusted_cfg.layer1, 'mlp_list') and
+                len(adjusted_cfg.layer1.mlp_list) > 0):
+                mlp_list = list(adjusted_cfg.layer1.mlp_list)
+                mlp_list[0] = feature_input_dim  # RGB (optional) + optional mask
+                adjusted_cfg.layer1.mlp_list = mlp_list
+
+        elif backbone_name == 'ptv3':
+            # For PTv3: adjust the in_channels parameter
+            # PTv3 expects the total input dimension including xyz coordinates
+            adjusted_cfg.in_channels = total_input_dim  # xyz + rgb (optional) + optional mask
+
+        return adjusted_cfg
     
     def forward(self, x_t: torch.Tensor, ts: torch.Tensor, data: Dict) -> torch.Tensor:
         """
@@ -558,7 +604,11 @@ class DiTModel(nn.Module):
                 
                 # Ensure proper device placement
                 model_device = self._get_device()
-                scene_pc = scene_pc.to(model_device, dtype=torch.float32)
+                scene_pc = scene_pc.to(model_device, dtype=torch.float32)  # (B, N, 6) - xyz + rgb
+                
+                # Handle RGB inclusion
+                if not self.use_rgb:
+                    scene_pc = scene_pc[..., :3]  # Keep only xyz
                 
                 # Handle object mask inclusion in scene point cloud
                 if self.use_object_mask and 'object_mask' in data and data['object_mask'] is not None:
@@ -572,6 +622,9 @@ class DiTModel(nn.Module):
                 # Validate scene point cloud dimensions
                 if pos.dim() != 3:
                     raise DiTConditioningError(f"Scene point cloud must be 3D tensor, got {pos.dim()}D")
+                
+                # Log the final point cloud shape and configuration
+                # self.logger.info(f"Scene point cloud - Shape: {pos.shape}, use_rgb: {self.use_rgb}, use_object_mask: {self.use_object_mask}")
                 
                 # Extract scene features
                 _, scene_feat = self.scene_model(pos)

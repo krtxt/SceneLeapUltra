@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+---
+运行测试前，用source ~/.bashrc && conda activate DexGrasp 激活环境

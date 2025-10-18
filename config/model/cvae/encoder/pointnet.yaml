@@ -1,26 +1,4 @@
 object_backbone:
-  # name: pointnet2_3sa
-  # use_pooling: false
-  # layer1:
-  #   npoint: 1024
-  #   radius_list: [0.02]
-  #   nsample_list: [64]
-  #   mlp_list: [0, 64, 128]
-  # layer2:
-  #   npoint: 512
-  #   radius_list: [0.05]
-  #   nsample_list: [32]
-  #   mlp_list: [128, 256, 256]
-  # layer3:
-  #   npoint: 256
-  #   radius_list: [0.1]
-  #   nsample_list: [16]
-  #   mlp_list:
-  #     - 256
-  #     - 512
-  #     - 512
-  # use_xyz: true
-  # normalize_xyz: true
   name: pointnet2
   use_pooling: false
   layer1:
@@ -68,6 +46,7 @@ object_backbone:
     - 512
   use_xyz: true
   normalize_xyz: true
+
 hand_backbone:
   name: pointnet2_3sa
   use_pooling: false
@@ -91,6 +70,7 @@ hand_backbone:
       - 512
   use_xyz: true
   normalize_xyz: true
+
 encoder_dim: 512
 condition_dim: 512
 hidden_dim: 256
