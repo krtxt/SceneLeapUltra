@@ -2,3 +2,5 @@
 alwaysApply: true
 ---
 运行测试前，用source ~/.bashrc && conda activate DexGrasp 激活环境
+
+所有测试代码临时代码脚本放在tests文件夹底下

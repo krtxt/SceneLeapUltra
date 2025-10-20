@@ -1,5 +1,6 @@
 defaults:
-  - decoder: unet
+  # - decoder: unet
+  - decoder: dit
   - criterion: loss_standardized
   - _self_
 
@@ -22,15 +23,25 @@ schedule_cfg:
   beta_schedule: linear
   s: 0.008
 
-optimizer:
-  name: adam
-  lr: 0.0001
-  weight_decay: 0.0001
+# optimizer:
+#   name: adam
+#   lr: 0.0001
+#   weight_decay: 0.0001
 
+# scheduler:
+#   name: cosine
+#   t_max: 1000
+#   min_lr: 1.0e-05
+optimizer:
+  name: adamw
+  lr: 0.0006
+  weight_decay: 0.001
 scheduler:
-  name: cosine
+  name: steplr
   t_max: 1000
   min_lr: 1.0e-05
+  step_size: 100
+  step_gamma: 0.5
 
 loss_type: l2
 out_sigmoid: false

@@ -7,7 +7,7 @@ are properly set and compatible with the model requirements.
 
 import logging
 from typing import Dict, Any, List, Optional
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 
 
 class DiTConfigValidationError(Exception):
@@ -161,62 +161,115 @@ def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
     if not hasattr(backbone_cfg, 'name'):
         raise DiTConfigValidationError("Backbone configuration missing 'name' parameter")
     
-    # Currently only PointNet2 is supported
-    if backbone_cfg.name.lower() != 'pointnet2':
-        raise DiTConfigValidationError(
-            f"Unsupported backbone '{backbone_cfg.name}'. Currently only 'pointnet2' is supported"
-        )
-    
-    # Validate PointNet2 specific parameters
-    required_layers = ['layer1', 'layer2', 'layer3', 'layer4']
-    for layer_name in required_layers:
-        if not hasattr(backbone_cfg, layer_name):
-            raise DiTConfigValidationError(
-                f"PointNet2 backbone missing required layer: {layer_name}"
-            )
-        
-        layer_cfg = getattr(backbone_cfg, layer_name)
-        
-        # Check required layer parameters
-        required_layer_params = ['npoint', 'radius_list', 'nsample_list', 'mlp_list']
-        for param in required_layer_params:
-            if not hasattr(layer_cfg, param):
+    backbone_name = backbone_cfg.name.lower()
+
+    if backbone_name == 'pointnet2':
+        # Validate PointNet2 specific parameters
+        required_layers = ['layer1', 'layer2', 'layer3', 'layer4']
+        for layer_name in required_layers:
+            if not hasattr(backbone_cfg, layer_name):
                 raise DiTConfigValidationError(
-                    f"PointNet2 {layer_name} missing required parameter: {param}"
+                    f"PointNet2 backbone missing required layer: {layer_name}"
                 )
-        
-        # Validate parameter values
-        if layer_cfg.npoint <= 0:
-            raise DiTConfigValidationError(
-                f"PointNet2 {layer_name} npoint ({layer_cfg.npoint}) must be positive"
-            )
-        
-        # Handle both list and single value formats for radius_list
-        radius_list = layer_cfg.radius_list
-        if not isinstance(radius_list, (list, tuple)):
-            radius_list = [radius_list]
-        if len(radius_list) == 0:
-            raise DiTConfigValidationError(
-                f"PointNet2 {layer_name} radius_list must be non-empty"
-            )
-        
-        # Handle both list and single value formats for nsample_list
-        nsample_list = layer_cfg.nsample_list
-        if not isinstance(nsample_list, (list, tuple)):
-            nsample_list = [nsample_list]
-        if len(nsample_list) == 0:
-            raise DiTConfigValidationError(
-                f"PointNet2 {layer_name} nsample_list must be non-empty"
-            )
-        
-        # Handle both list and single value formats for mlp_list
-        mlp_list = layer_cfg.mlp_list
-        if not isinstance(mlp_list, (list, tuple)):
-            mlp_list = [mlp_list]
-        if len(mlp_list) == 0:
-            raise DiTConfigValidationError(
-                f"PointNet2 {layer_name} mlp_list must be non-empty"
-            )
+            
+            layer_cfg = getattr(backbone_cfg, layer_name)
+            
+            # Check required layer parameters
+            required_layer_params = ['npoint', 'radius_list', 'nsample_list', 'mlp_list']
+            for param in required_layer_params:
+                if not hasattr(layer_cfg, param):
+                    raise DiTConfigValidationError(
+                        f"PointNet2 {layer_name} missing required parameter: {param}"
+                    )
+            
+            # Validate parameter values
+            if layer_cfg.npoint <= 0:
+                raise DiTConfigValidationError(
+                    f"PointNet2 {layer_name} npoint ({layer_cfg.npoint}) must be positive"
+                )
+            
+            # Handle both list and single value formats for radius_list
+            radius_list = layer_cfg.radius_list
+            if not isinstance(radius_list, (list, tuple)):
+                radius_list = [radius_list]
+            if len(radius_list) == 0:
+                raise DiTConfigValidationError(
+                    f"PointNet2 {layer_name} radius_list must be non-empty"
+                )
+            
+            # Handle both list and single value formats for nsample_list
+            nsample_list = layer_cfg.nsample_list
+            if not isinstance(nsample_list, (list, tuple)):
+                nsample_list = [nsample_list]
+            if len(nsample_list) == 0:
+                raise DiTConfigValidationError(
+                    f"PointNet2 {layer_name} nsample_list must be non-empty"
+                )
+            
+            # Handle both list and single value formats for mlp_list
+            mlp_list = layer_cfg.mlp_list
+            if not isinstance(mlp_list, (list, tuple)):
+                mlp_list = [mlp_list]
+            if len(mlp_list) == 0:
+                raise DiTConfigValidationError(
+                    f"PointNet2 {layer_name} mlp_list must be non-empty"
+                )
+
+    elif backbone_name == 'ptv3':
+        # PTv3 is supported. Perform light validation with permissive defaults.
+        # Only validate values if they are explicitly provided; otherwise rely on backbone defaults.
+        if hasattr(backbone_cfg, 'in_channels'):
+            in_ch = getattr(backbone_cfg, 'in_channels')
+            if not isinstance(in_ch, int) or in_ch <= 0:
+                raise DiTConfigValidationError(
+                    f"PTv3 in_channels ({in_ch}) must be a positive integer if provided"
+                )
+        if hasattr(backbone_cfg, 'grid_size'):
+            grid = getattr(backbone_cfg, 'grid_size')
+            if not (isinstance(grid, (int, float)) and grid > 0):
+                raise DiTConfigValidationError(
+                    f"PTv3 grid_size ({grid}) must be a positive number if provided"
+                )
+        if hasattr(backbone_cfg, 'max_context_points'):
+            mcp = getattr(backbone_cfg, 'max_context_points')
+            if not (isinstance(mcp, int) and mcp > 0):
+                raise DiTConfigValidationError(
+                    f"PTv3 max_context_points ({mcp}) must be a positive integer if provided"
+                )
+        # Optional structural lists (when provided) should be non-empty sequences
+        optional_seq_params = [
+            'enc_depths', 'enc_channels', 'enc_num_head', 'enc_patch_size',
+            'dec_depths', 'dec_channels', 'dec_num_head', 'dec_patch_size'
+        ]
+        for pname in optional_seq_params:
+            if hasattr(backbone_cfg, pname):
+                val = getattr(backbone_cfg, pname)
+                # Accept OmegaConf ListConfig in addition to list/tuple
+                if isinstance(val, (list, tuple, ListConfig)):
+                    if len(val) == 0:
+                        raise DiTConfigValidationError(
+                            f"PTv3 {pname} must be non-empty if provided"
+                        )
+                else:
+                    # Try generic length check for other sequence-like types (excluding strings)
+                    if isinstance(val, str):
+                        raise DiTConfigValidationError(
+                            f"PTv3 {pname} must be a non-empty sequence (not str) if provided"
+                        )
+                    try:
+                        if len(val) == 0:
+                            raise DiTConfigValidationError(
+                                f"PTv3 {pname} must be non-empty if provided"
+                            )
+                    except Exception:
+                        raise DiTConfigValidationError(
+                            f"PTv3 {pname} must be a non-empty list/tuple/ListConfig if provided"
+                        )
+
+    else:
+        raise DiTConfigValidationError(
+            f"Unsupported backbone '{backbone_cfg.name}'. Supported backbones: 'pointnet2', 'ptv3'"
+        )
 
 
 def validate_dit_compatibility_with_diffuser(dit_cfg: DictConfig, diffuser_cfg: DictConfig) -> bool:

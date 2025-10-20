@@ -111,58 +111,6 @@ flowchart TB
     class Output outputStyle
 ```
 
-### 文本条件开关行为
-- **启用文本条件 (`use_text_condition=True`)**: `DiTModel.condition()` 返回的 `text_cond` 会在前向传播时被扩展为 `(B, 1, d_model)`，并送入每一层 `DiTBlock` 的文本交叉注意力分支。该分支使用与场景一致的 `AdaptiveLayerNorm`，并在训练时受 `text_dropout_prob` 控制的掩码影响，实现按批次丢弃文本语义的能力。
-- **禁用文本条件**: 若配置关闭或未提供 `positive_prompt`，`text_cond` 为空，`DiTBlock` 中的文本交叉注意力和对应的归一化分支被跳过，模型仅依赖抓取自注意力、场景交叉注意力以及前馈网络。这样可减少算力开销，同时保证与场景条件的兼容。
-
-```mermaid
-flowchart TB
-    %% 输入（无文本条件）
-    Input["Input<br/>(B, num_grasps, d_model)"]
-    TimeEmb["Time Embedding"]
-    SceneCtx["Scene Context"]
-    
-    %% Self-Attention 分支
-    Input --> Norm1["Norm<br/>(AdaptiveLayerNorm)"]
-    TimeEmb -.-> Norm1
-    Norm1 --> SelfAttn["Self-Attention<br/>(EfficientAttention)"]
-    SelfAttn --> Add1((+))
-    Input --> Add1
-    
-    %% Scene Cross-Attention 分支
-    Add1 --> Norm2["Norm<br/>(AdaptiveLayerNorm)"]
-    TimeEmb -.-> Norm2
-    Norm2 --> SceneAttn["Cross-Attention<br/>(Scene)"]
-    SceneCtx -.-> SceneAttn
-    SceneAttn --> Add2((+))
-    Add1 --> Add2
-    
-    %% Feed-Forward 分支
-    Add2 --> NormFFN["Norm<br/>(AdaptiveLayerNorm)"]
-    TimeEmb -.-> NormFFN
-    NormFFN --> FFN["FeedForward<br/>(Linear-GELU-Linear)"]
-    FFN --> Add4((+))
-    Add2 --> Add4
-    
-    %% 输出
-    Add4 --> Output["Output<br/>(B, num_grasps, d_model)"]
-    
-    %% 样式定义
-    classDef inputStyle fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
-    classDef normStyle fill:#E6E6FA,stroke:#9370DB,stroke-width:2px
-    classDef attnStyle fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
-    classDef condStyle fill:#E0FFE0,stroke:#32CD32,stroke-width:2px
-    classDef ffnStyle fill:#E6E6FA,stroke:#9370DB,stroke-width:2px
-    classDef outputStyle fill:#FFE4B5,stroke:#FF8C00,stroke-width:2px
-    
-    class Input,TimeEmb inputStyle
-    class SceneCtx condStyle
-    class Norm1,Norm2,NormFFN normStyle
-    class SelfAttn,SceneAttn attnStyle
-    class FFN ffnStyle
-    class Output outputStyle
-```
-
 ## 架构组件说明
 
 ### 1. 输入处理
@@ -359,3 +307,4 @@ model.optimize_for_training()  # 应用训练优化
 - **配置验证**: `/models/decoder/dit_config_validation.py`
 - **输入验证**: `/models/decoder/dit_validation.py`
 - **内存优化**: `/models/decoder/dit_memory_optimization.py`
+
