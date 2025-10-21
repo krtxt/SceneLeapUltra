@@ -420,18 +420,84 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
 
     def _compute_loss(self, batch: Dict, mode: str = 'train') -> Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict]:
         """Unified loss computation logic for training and validation."""
+        # Step 1: Process hand pose
         processed_batch = process_hand_pose(batch, rot_type=self.rot_type, mode=self.mode)
         norm_pose = processed_batch['norm_pose']
         B = norm_pose.shape[0]
 
-        ts = self._sample_timesteps(B)
-        noise = torch.randn_like(norm_pose, device=self.device)
-        x_t = self.q_sample(x0=norm_pose, t=ts, noise=noise)
+        # Log input statistics
+        if torch.isnan(norm_pose).any():
+            logging.error(f"[NaN Detection] NaN in norm_pose after process_hand_pose")
+            logging.error(f"  norm_pose shape: {norm_pose.shape}")
+            logging.error(f"  NaN count: {torch.isnan(norm_pose).sum().item()}/{norm_pose.numel()}")
+            raise RuntimeError("NaN detected in normalized pose input")
 
+        # Step 2: Sample timesteps
+        ts = self._sample_timesteps(B)
+        logging.debug(f"[Diffusion] Sampled timesteps: min={ts.min().item()}, max={ts.max().item()}, mean={ts.float().mean().item():.2f}")
+
+        # Step 3: Generate noise and sample noisy data
+        noise = torch.randn_like(norm_pose, device=self.device)
+        if torch.isnan(noise).any() or torch.isinf(noise).any():
+            logging.error(f"[NaN Detection] Invalid noise generated")
+            logging.error(f"  noise shape: {noise.shape}, NaN: {torch.isnan(noise).sum().item()}, Inf: {torch.isinf(noise).sum().item()}")
+            raise RuntimeError("Invalid noise generated")
+
+        x_t = self.q_sample(x0=norm_pose, t=ts, noise=noise)
+        if torch.isnan(x_t).any() or torch.isinf(x_t).any():
+            logging.error(f"[NaN Detection] NaN/Inf in x_t after q_sample")
+            logging.error(f"  x_t shape: {x_t.shape}")
+            logging.error(f"  x_t stats: min={x_t[~torch.isnan(x_t) & ~torch.isinf(x_t)].min():.6f if (~torch.isnan(x_t) & ~torch.isinf(x_t)).any() else 'all invalid'}, max={x_t[~torch.isnan(x_t) & ~torch.isinf(x_t)].max():.6f if (~torch.isnan(x_t) & ~torch.isinf(x_t)).any() else 'all invalid'}")
+            logging.error(f"  NaN count: {torch.isnan(x_t).sum().item()}, Inf count: {torch.isinf(x_t).sum().item()}")
+            logging.error(f"  norm_pose stats: min={norm_pose.min():.6f}, max={norm_pose.max():.6f}, mean={norm_pose.mean():.6f}")
+            logging.error(f"  noise stats: min={noise.min():.6f}, max={noise.max():.6f}, mean={noise.mean():.6f}, std={noise.std():.6f}")
+            logging.error(f"  timesteps: {ts}")
+            raise RuntimeError("NaN/Inf detected in noisy sample x_t")
+
+        logging.debug(f"[Diffusion] x_t stats: min={x_t.min():.6f}, max={x_t.max():.6f}, mean={x_t.mean():.6f}, std={x_t.std():.6f}")
+
+        # Step 4: Compute conditioning features
+        logging.debug(f"[Conditioning] Computing conditioning features...")
         condition_dict = self.eps_model.condition(processed_batch)
+
+        # Validate conditioning outputs
+        if 'scene_cond' in condition_dict and condition_dict['scene_cond'] is not None:
+            scene_cond = condition_dict['scene_cond']
+            if torch.isnan(scene_cond).any():
+                logging.error(f"[NaN Detection] NaN in scene_cond from conditioning")
+                logging.error(f"  scene_cond shape: {scene_cond.shape}")
+                logging.error(f"  NaN count: {torch.isnan(scene_cond).sum().item()}/{scene_cond.numel()}")
+                raise RuntimeError("NaN detected in scene conditioning")
+            logging.debug(f"[Conditioning] scene_cond stats: shape={scene_cond.shape}, min={scene_cond.min():.6f}, max={scene_cond.max():.6f}, mean={scene_cond.mean():.6f}")
+
+        if 'text_cond' in condition_dict and condition_dict['text_cond'] is not None:
+            text_cond = condition_dict['text_cond']
+            if torch.isnan(text_cond).any():
+                logging.error(f"[NaN Detection] NaN in text_cond from conditioning")
+                logging.error(f"  text_cond shape: {text_cond.shape}")
+                logging.error(f"  NaN count: {torch.isnan(text_cond).sum().item()}/{text_cond.numel()}")
+                raise RuntimeError("NaN detected in text conditioning")
+            logging.debug(f"[Conditioning] text_cond stats: shape={text_cond.shape}, min={text_cond.min():.6f}, max={text_cond.max():.6f}, mean={text_cond.mean():.6f}")
+
         processed_batch.update(condition_dict)
 
+        # Step 5: Forward through model
+        logging.debug(f"[Model Forward] Passing through eps_model...")
         output = self.eps_model(x_t, ts, processed_batch)
+
+        # Validate model output
+        if torch.isnan(output).any():
+            logging.error(f"[NaN Detection] NaN in model output")
+            logging.error(f"  output shape: {output.shape}")
+            logging.error(f"  NaN count: {torch.isnan(output).sum().item()}/{output.numel()}")
+            raise RuntimeError("NaN detected in model output")
+        if torch.isinf(output).any():
+            logging.error(f"[NaN Detection] Inf in model output")
+            logging.error(f"  output shape: {output.shape}")
+            logging.error(f"  Inf count: {torch.isinf(output).sum().item()}/{output.numel()}")
+            raise RuntimeError("Inf detected in model output")
+
+        logging.debug(f"[Model Forward] output stats: shape={output.shape}, min={output.min():.6f}, max={output.max():.6f}, mean={output.mean():.6f}, std={output.std():.6f}")
 
         if self.pred_x0:
             pred_dict = {"pred_pose_norm": output, "noise": noise}

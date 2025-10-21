@@ -160,6 +160,55 @@ def load_and_process_hand_pose_data(
     return hand_pose_data
 
 
+def load_objectcentric_hand_pose_data(
+    succ_grasp_dir: str
+) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    """
+    Load grasp poses and object poses for object-centric datasets.
+
+    Args:
+        succ_grasp_dir: Directory containing successful grasp .npy files
+
+    Returns:
+        Tuple of (hand_pose_data, obj_pose_data) dictionaries keyed by object_code
+    """
+    hand_pose_data: Dict[str, torch.Tensor] = {}
+    obj_pose_data: Dict[str, torch.Tensor] = {}
+
+    if not os.path.exists(succ_grasp_dir):
+        raise FileNotFoundError(f"Successful grasp directory not found: {succ_grasp_dir}")
+
+    npy_files = [f for f in os.listdir(succ_grasp_dir) if f.endswith(".npy")]
+    if not npy_files:
+        raise ValueError(f"No .npy files found in {succ_grasp_dir}")
+
+    for npy_file in npy_files:
+        object_code = os.path.splitext(npy_file)[0]
+        npy_path = os.path.join(succ_grasp_dir, npy_file)
+
+        try:
+            grasp_data_dict = np.load(npy_path, allow_pickle=True).item()
+            raw_qpos_in_grasp_world_np = grasp_data_dict.get("grasp_qpos")
+            obj_pose_7d_np = grasp_data_dict.get("obj_pose")
+
+            if not validate_hand_pose_data(raw_qpos_in_grasp_world_np, obj_pose_7d_np):
+                continue
+
+            qpos_gw_tensor = torch.from_numpy(raw_qpos_in_grasp_world_np.astype(np.float32))
+            obj_pose_tensor = torch.from_numpy(obj_pose_7d_np.astype(np.float32))
+            reverted_qpos = revert_leap_qpos_static(qpos_gw_tensor)
+
+            hand_pose_data[object_code] = reverted_qpos
+            obj_pose_data[object_code] = obj_pose_tensor
+        except Exception:
+            continue
+
+    if not hand_pose_data:
+        raise ValueError("No valid hand pose data loaded")
+
+    return hand_pose_data, obj_pose_data
+
+
 def load_scene_metadata(scene_dirs: List[str]) -> Tuple[Dict, Dict, Dict]:
     """
     Load scene metadata including instance maps, scene ground truth, and collision info.

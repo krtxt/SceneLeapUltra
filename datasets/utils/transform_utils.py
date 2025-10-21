@@ -396,3 +396,128 @@ def get_specific_hand_pose(
         return all_reverted_poses_tensor[grasp_npy_idx]
     else:
         return torch.zeros(default_pose_dim, dtype=torch.float32)
+
+
+def apply_object_pose_to_vertices(
+    vertices: torch.Tensor,
+    object_pose: torch.Tensor
+) -> torch.Tensor:
+    """
+    Transform vertices from object model frame to grasp/world frame.
+
+    Args:
+        vertices: Vertex positions in object model frame (V, 3)
+        object_pose: Object pose (7,) [t_obj(3), q_obj(4)] in target frame
+
+    Returns:
+        Transformed vertices in target frame (V, 3)
+    """
+    if vertices.numel() == 0:
+        return vertices
+
+    t_obj = object_pose[:3]
+    q_obj = object_pose[3:7]
+    R_obj = quaternion_to_matrix(q_obj)
+    return torch.matmul(vertices, R_obj.T) + t_obj.unsqueeze(0)
+
+
+def center_points_xy(points: torch.Tensor, center: torch.Tensor) -> torch.Tensor:
+    """
+    Center points on the XY plane by subtracting the center translation.
+
+    Args:
+        points: Input points (N, 3)
+        center: Center translation (3,)
+
+    Returns:
+        Centered points (N, 3) with original Z preserved
+    """
+    if points.numel() == 0:
+        return points
+
+    offset = torch.zeros(3, dtype=points.dtype, device=points.device)
+    offset[:2] = center[:2].to(device=points.device, dtype=points.dtype)
+    return points - offset.unsqueeze(0)
+
+
+def center_hand_poses_xy(hand_poses: torch.Tensor, center: torch.Tensor) -> torch.Tensor:
+    """
+    Center hand poses on the XY plane.
+
+    Args:
+        hand_poses: Hand pose tensor (N, 23) [P, Q, Joints]
+        center: Center translation (3,)
+
+    Returns:
+        Centered hand pose tensor (N, 23)
+    """
+    if hand_poses.numel() == 0:
+        return hand_poses
+
+    positions = hand_poses[:, :3]
+    offset = torch.zeros(3, dtype=hand_poses.dtype, device=hand_poses.device)
+    offset[:2] = center[:2].to(device=hand_poses.device, dtype=hand_poses.dtype)
+    centered_positions = positions - offset.unsqueeze(0)
+    return torch.cat([centered_positions, hand_poses[:, 3:]], dim=1)
+
+
+def reorder_hand_pose_batch(hand_poses: torch.Tensor) -> torch.Tensor:
+    """
+    Reorder batched hand poses from [P, Q, Joints] to [P, Joints, Q].
+
+    Args:
+        hand_poses: Hand pose tensor (N, 23) in [P, Q, Joints] format
+
+    Returns:
+        Reordered hand pose tensor (N, 23) in [P, Joints, Q] format
+    """
+    if not isinstance(hand_poses, torch.Tensor) or hand_poses.ndim != 2 or hand_poses.shape[1] != 23:
+        batch_dim = hand_poses.shape[0] if isinstance(hand_poses, torch.Tensor) and hand_poses.ndim > 0 else 0
+        dtype = hand_poses.dtype if isinstance(hand_poses, torch.Tensor) else torch.float32
+        device = hand_poses.device if isinstance(hand_poses, torch.Tensor) else torch.device("cpu")
+        return torch.zeros((batch_dim, 23), dtype=dtype, device=device)
+
+    positions = hand_poses[:, :3]
+    quaternions = hand_poses[:, 3:7]
+    joints = hand_poses[:, 7:]
+    return torch.cat([positions, joints, quaternions], dim=1)
+
+
+def create_se3_matrices_from_pose_batch(
+    positions: torch.Tensor,
+    quaternions: torch.Tensor
+) -> torch.Tensor:
+    """
+    Create batched SE(3) matrices from positions and quaternions.
+
+    Args:
+        positions: Translation vectors (N, 3)
+        quaternions: Quaternions (N, 4) in wxyz convention
+
+    Returns:
+        SE(3) matrices (N, 4, 4)
+    """
+    if positions.shape[0] == 0:
+        return torch.zeros((0, 4, 4), dtype=positions.dtype, device=positions.device)
+
+    corrected_quats = quaternions.clone()
+    norms = torch.norm(corrected_quats, dim=1, keepdim=True)
+    zero_mask = norms.squeeze(1) < 1e-6
+    if zero_mask.any():
+        identity_q = torch.tensor(
+            [1.0, 0.0, 0.0, 0.0],
+            dtype=corrected_quats.dtype,
+            device=corrected_quats.device,
+        )
+        corrected_quats[zero_mask] = identity_q
+
+    rotation = quaternion_to_matrix(corrected_quats)
+    se3 = torch.zeros(
+        (positions.shape[0], 4, 4),
+        dtype=positions.dtype,
+        device=positions.device,
+    )
+    se3[:, :3, :3] = rotation
+    se3[:, :3, 3] = positions
+    se3[:, 3, 3] = 1.0
+    return se3

@@ -5,11 +5,15 @@ This module provides utility functions for point cloud processing, including
 RGB color mapping, cropping, downsampling, and mask operations.
 """
 
+import logging
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
-from typing import Tuple, Optional
+
 try:
     from scipy.spatial import cKDTree
+
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
@@ -426,6 +430,126 @@ def _remove_outliers_statistical_numpy(
     inlier_mask = avg_distances <= threshold
 
     return inlier_mask
+
+
+def create_table_plane(
+    table_size: float,
+    device: torch.device,
+    dtype: torch.dtype,
+    table_z: float = 0.0
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Create a square table plane mesh centered at the origin on the XY plane.
+
+    Args:
+        table_size: Edge length of the table square (meters)
+        device: Target torch device
+        dtype: Target torch dtype
+        table_z: Height of the table plane
+
+    Returns:
+        Tuple of (table_verts, table_faces)
+    """
+    half_size = table_size / 2.0
+    table_verts = torch.tensor(
+        [
+            [-half_size, -half_size, table_z],
+            [half_size, -half_size, table_z],
+            [half_size, half_size, table_z],
+            [-half_size, half_size, table_z],
+        ],
+        dtype=dtype,
+        device=device,
+    )
+    table_faces = torch.tensor(
+        [
+            [0, 1, 2],
+            [0, 2, 3],
+        ],
+        dtype=torch.long,
+        device=device,
+    )
+    return table_verts, table_faces
+
+
+def sample_points_from_mesh_separated(
+    obj_verts: torch.Tensor,
+    obj_faces: torch.Tensor,
+    table_verts: torch.Tensor,
+    table_faces: torch.Tensor,
+    max_points: int,
+    object_sampling_ratio: float,
+) -> torch.Tensor:
+    """
+    Sample points from object and table meshes separately and merge them.
+
+    Args:
+        obj_verts: Object vertices (V, 3)
+        obj_faces: Object faces (F, 3)
+        table_verts: Table vertices (4, 3)
+        table_faces: Table faces (2, 3)
+        max_points: Total number of sampled points
+        object_sampling_ratio: Ratio of points dedicated to the object mesh
+
+    Returns:
+        Sampled points (max_points, 3)
+    """
+    if max_points <= 0:
+        return torch.zeros((0, 3), dtype=obj_verts.dtype, device=obj_verts.device)
+
+    device = obj_verts.device
+    dtype = obj_verts.dtype
+
+    num_obj_points = int(max_points * object_sampling_ratio)
+    num_obj_points = max(0, min(max_points, num_obj_points))
+    num_table_points = max_points - num_obj_points
+
+    try:
+        from pytorch3d.ops import sample_points_from_meshes
+        from pytorch3d.structures import Meshes
+
+        sampled_chunks = []
+
+        if num_obj_points > 0:
+            if obj_verts.numel() > 0 and obj_faces.numel() > 0:
+                obj_mesh = Meshes(verts=[obj_verts], faces=[obj_faces])
+                obj_points = sample_points_from_meshes(
+                    obj_mesh, num_samples=num_obj_points
+                ).squeeze(0)
+            else:
+                obj_points = torch.zeros((num_obj_points, 3), dtype=dtype, device=device)
+            sampled_chunks.append(obj_points)
+
+        if num_table_points > 0:
+            if table_verts.numel() > 0 and table_faces.numel() > 0:
+                table_mesh = Meshes(verts=[table_verts], faces=[table_faces])
+                table_points = sample_points_from_meshes(
+                    table_mesh, num_samples=num_table_points
+                ).squeeze(0)
+            else:
+                table_points = torch.zeros((num_table_points, 3), dtype=dtype, device=device)
+            sampled_chunks.append(table_points)
+
+        if not sampled_chunks:
+            return torch.zeros((max_points, 3), dtype=dtype, device=device)
+
+        combined_points = torch.cat(sampled_chunks, dim=0)
+
+        if combined_points.shape[0] != max_points:
+            padding = torch.zeros(
+                (max_points - combined_points.shape[0], 3), dtype=dtype, device=device
+            )
+            combined_points = torch.cat([combined_points, padding], dim=0)
+
+        if combined_points.shape[0] > 0:
+            perm = torch.randperm(combined_points.shape[0], device=device)
+            combined_points = combined_points[perm]
+
+        return combined_points
+
+    except Exception as exc:
+        logging.warning(f"Failed to sample points from mesh: {exc}")
+        return torch.zeros((max_points, 3), dtype=dtype, device=device)
 
 
 def downsample_point_cloud_with_mask(

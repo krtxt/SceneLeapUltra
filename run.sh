@@ -40,3 +40,6 @@ bash train_distributed.sh --gpus 4 \
 # bash train_distributed.sh --gpus 4 \
 #     save_root="./experiments/lr_1.5e4" \
 #     model.optimizer.lr=1.5e-4
+
+# bash train_distributed.sh --gpus 4 \
+#   save_root="$EXP" resume=true "checkpoint_path=$CKPT" 

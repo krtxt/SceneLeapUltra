@@ -37,9 +37,39 @@ class DiffusionCoreMixin:
 
         B, num_grasps, _ = x0.shape
         t_expanded = t.unsqueeze(1).expand(-1, num_grasps)
+
+        # Get diffusion coefficients
         sqrt_alphas_cumprod_t = self.sqrt_alphas_cumprod[t_expanded].unsqueeze(-1)
         sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_expanded].unsqueeze(-1)
+
+        # Check for NaN in diffusion coefficients
+        if torch.isnan(sqrt_alphas_cumprod_t).any() or torch.isnan(sqrt_one_minus_alphas_cumprod_t).any():
+            logging.error(f"[NaN Detection] NaN in diffusion coefficients")
+            logging.error(f"  timesteps t: {t}")
+            logging.error(f"  t_expanded shape: {t_expanded.shape}, values: {t_expanded}")
+            logging.error(f"  sqrt_alphas_cumprod_t NaN count: {torch.isnan(sqrt_alphas_cumprod_t).sum().item()}")
+            logging.error(f"  sqrt_one_minus_alphas_cumprod_t NaN count: {torch.isnan(sqrt_one_minus_alphas_cumprod_t).sum().item()}")
+            logging.error(f"  sqrt_alphas_cumprod buffer stats: min={self.sqrt_alphas_cumprod.min():.6f}, max={self.sqrt_alphas_cumprod.max():.6f}")
+            raise RuntimeError("NaN detected in diffusion coefficients")
+
+        logging.debug(f"[q_sample] sqrt_alphas_cumprod_t: min={sqrt_alphas_cumprod_t.min():.6f}, max={sqrt_alphas_cumprod_t.max():.6f}, mean={sqrt_alphas_cumprod_t.mean():.6f}")
+        logging.debug(f"[q_sample] sqrt_one_minus_alphas_cumprod_t: min={sqrt_one_minus_alphas_cumprod_t.min():.6f}, max={sqrt_one_minus_alphas_cumprod_t.max():.6f}, mean={sqrt_one_minus_alphas_cumprod_t.mean():.6f}")
+
+        # Perform forward diffusion
         x_t = sqrt_alphas_cumprod_t * x0 + sqrt_one_minus_alphas_cumprod_t * noise
+
+        # Check for NaN in output
+        if torch.isnan(x_t).any() or torch.isinf(x_t).any():
+            logging.error(f"[NaN Detection] NaN/Inf in q_sample output")
+            logging.error(f"  x_t shape: {x_t.shape}")
+            logging.error(f"  NaN count: {torch.isnan(x_t).sum().item()}, Inf count: {torch.isinf(x_t).sum().item()}")
+            logging.error(f"  x0 stats: min={x0.min():.6f}, max={x0.max():.6f}, mean={x0.mean():.6f}")
+            logging.error(f"  noise stats: min={noise.min():.6f}, max={noise.max():.6f}, mean={noise.mean():.6f}")
+            logging.error(f"  sqrt_alphas_cumprod_t: min={sqrt_alphas_cumprod_t.min():.6f}, max={sqrt_alphas_cumprod_t.max():.6f}")
+            logging.error(f"  sqrt_one_minus_alphas_cumprod_t: min={sqrt_one_minus_alphas_cumprod_t.min():.6f}, max={sqrt_one_minus_alphas_cumprod_t.max():.6f}")
+            raise RuntimeError("NaN/Inf detected in q_sample output")
+
+        logging.debug(f"[q_sample] Output x_t: min={x_t.min():.6f}, max={x_t.max():.6f}, mean={x_t.mean():.6f}, std={x_t.std():.6f}")
 
         return x_t.squeeze(1) if input_dim == 2 else x_t
 

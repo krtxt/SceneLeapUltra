@@ -6,7 +6,6 @@ import numpy as np
 import cv2
 from pytorch3d.transforms import (quaternion_to_matrix, matrix_to_quaternion)
 from typing import Optional, List, Dict, Any, Tuple
-import random
 import logging
 
 from .utils.common_utils import (
@@ -44,6 +43,11 @@ from .utils.data_processing_utils import (
     collate_batch_data,
     collate_variable_grasps_batch,
     get_depth_view_indices_from_scene
+)
+from .utils.grasp_sampling_utils import (
+    generate_exhaustive_chunks,
+    sample_grasps_from_available,
+    sample_indices_from_available
 )
 from .utils.coordinate_transform_strategies import (
     TransformationData,
@@ -153,9 +157,11 @@ class SceneLeapPlusDataset(_BaseLeapProDataset):
                         valid_cf_indices = cf_indices_tensor[valid_mask]
 
                         if self.max_grasps_per_object is not None and len(valid_cf_indices) > self.max_grasps_per_object:
-                            # 按照采样策略采样
-                            sampled_indices = self._sample_indices_from_available(
-                                valid_cf_indices.tolist(), all_poses_for_obj, self.max_grasps_per_object, self.grasp_sampling_strategy
+                            sampled_indices = sample_indices_from_available(
+                                valid_cf_indices.tolist(),
+                                all_poses_for_obj,
+                                self.max_grasps_per_object,
+                                self.grasp_sampling_strategy
                             )
                             valid_cf_indices = torch.tensor(sampled_indices, dtype=torch.long)
 
@@ -232,7 +238,11 @@ class SceneLeapPlusDataset(_BaseLeapProDataset):
                     })
                 continue
 
-            chunk_indices = self._generate_exhaustive_chunks(obj_poses_tensor, self.exhaustive_sampling_strategy)
+            chunk_indices = generate_exhaustive_chunks(
+                obj_poses_tensor,
+                self.num_grasps,
+                self.exhaustive_sampling_strategy
+            )
             for view_idx in group_data['views']:
                 for chunk_idx, indices in enumerate(chunk_indices):
                     exhaustive_data.append({
@@ -251,155 +261,19 @@ class SceneLeapPlusDataset(_BaseLeapProDataset):
                          f"Expansion={len(exhaustive_data) / len(base_data_index):.1f}x")
         return exhaustive_data
 
-    def _generate_exhaustive_chunks(self, all_poses: torch.Tensor, strategy: str) -> List[List[int]]:
-        """Generates exhaustive grasp chunks based on the specified strategy."""
-        total_grasps, num_chunks = all_poses.shape[0], all_poses.shape[0] // self.num_grasps
-        if num_chunks == 0: return []
 
-        if strategy == "sequential": return self._generate_sequential_chunks(total_grasps, num_chunks)
-        if strategy == "random": return self._generate_random_chunks(total_grasps, num_chunks)
-        if strategy == "interleaved": return self._generate_interleaved_chunks(total_grasps, num_chunks)
-        if strategy in ["chunk_farthest_point", "chunk_nearest_point"]:
-            return self._generate_spatial_chunks(all_poses, num_chunks, strategy.split('_')[1] + "_point")
-        raise ValueError(f"Unknown exhaustive sampling strategy: {strategy}")
-
-    def _generate_sequential_chunks(self, total_grasps: int, num_chunks: int) -> List[List[int]]:
-        """Generates sequential chunks: [0,1,2], [3,4,5], ..."""
-        return [list(range(i * self.num_grasps, (i + 1) * self.num_grasps)) for i in range(num_chunks)]
-
-    def _generate_random_chunks(self, total_grasps: int, num_chunks: int) -> List[List[int]]:
-        """Generates random, non-overlapping chunks."""
-        all_indices = list(range(total_grasps)); random.shuffle(all_indices)
-        return [all_indices[i * self.num_grasps:(i + 1) * self.num_grasps] for i in range(num_chunks)]
-
-    def _generate_interleaved_chunks(self, total_grasps: int, num_chunks: int) -> List[List[int]]:
-        """Generates interleaved chunks: [0,4,8], [1,5,9], ..."""
-        step = total_grasps // self.num_grasps
-        return [[(start_offset + i * step) % total_grasps for i in range(self.num_grasps)]
-                for start_offset in range(num_chunks)]
-
-    def _generate_spatial_chunks(self, all_poses: torch.Tensor, num_chunks: int, spatial_strategy: str) -> List[List[int]]:
-        """Generates spatial chunks using iterative spatial clustering."""
-        translation_points = all_poses[:, :3]
-        total_points, used_indices, chunk_indices = translation_points.shape[0], set(), []
-
-        for _ in range(num_chunks):
-            available_indices = [i for i in range(total_points) if i not in used_indices]
-            if len(available_indices) < self.num_grasps: break
-            available_points = translation_points[available_indices]
-
-            if spatial_strategy == "farthest_point":
-                local_fps_indices = self._farthest_point_sampling(available_points, self.num_grasps)
-                selected_indices = [available_indices[i] for i in local_fps_indices]
-            elif spatial_strategy == "nearest_point":
-                center_idx = torch.randint(0, len(available_indices), (1,)).item()
-                center_point = available_points[center_idx]
-                distances = torch.norm(available_points - center_point.unsqueeze(0), dim=1)
-                _, nearest_indices = torch.topk(distances, self.num_grasps, largest=False)
-                selected_indices = [available_indices[i] for i in nearest_indices]
-
-            chunk_indices.append(selected_indices)
-            used_indices.update(selected_indices)
-        return chunk_indices
-
-    def _farthest_point_sampling(self, points: torch.Tensor, num_samples: int) -> torch.Tensor:
-        """Farthest Point Sampling (FPS) algorithm for 3D points."""
-        N, device = points.shape[0], points.device
-        if N <= num_samples: return torch.arange(N, device=device)
-
-        sampled_indices = torch.zeros(num_samples, dtype=torch.long, device=device)
-        sampled_indices[0] = torch.randint(0, N, (1,), device=device)
-        distances = torch.full((N,), float('inf'), device=device)
-
-        for i in range(1, num_samples):
-            last_sampled_idx = sampled_indices[i - 1]
-            last_point = points[last_sampled_idx]
-            current_distances = torch.norm(points - last_point.unsqueeze(0), dim=1)
-            distances = torch.min(distances, current_distances)
-            sampled_indices[i] = torch.argmax(distances)
-            distances[sampled_indices[i]] = 0
-        return sampled_indices
-
-    def _nearest_point_sampling(self, points: torch.Tensor, num_samples: int) -> torch.Tensor:
-        """Nearest Point Sampling (NPS): randomly select a center, then find its nearest neighbors."""
-        N, device = points.shape[0], points.device
-        if N <= num_samples: return torch.arange(N, device=device)
-
-        center_idx = torch.randint(0, N, (1,), device=device).item()
-        center_point = points[center_idx]
-        distances = torch.norm(points - center_point.unsqueeze(0), dim=1)
-        _, nearest_indices = torch.topk(distances, num_samples, largest=False)
-        return nearest_indices
 
     def _sample_indices_from_available(self, indices, all_poses_for_obj, num_samples, strategy):
-        """
-        从 indices 中采样 num_samples 个索引，支持多种策略。
-        空间策略会用到 all_poses_for_obj 的 translation 部分。
-        """
-        import torch
-        indices = list(indices)
-        n = len(indices)
-        if n == 0 or num_samples <= 0:
-            return []
-        if n <= num_samples:
-            # 不足直接补齐
-            if strategy == "repeat":
-                return [indices[i % n] for i in range(num_samples)]
-            else:
-                # random/first_n等都直接补齐
-                extra = [indices[torch.randint(0, n, (1,)).item()] for _ in range(num_samples - n)]
-                return indices + extra
-        # n > num_samples
-        if strategy == "random":
-            perm = torch.randperm(n)[:num_samples]
-            return [indices[i] for i in perm]
-        elif strategy == "first_n":
-            return indices[:num_samples]
-        elif strategy == "repeat":
-            return [indices[i % n] for i in range(num_samples)]
-        elif strategy == "farthest_point":
-            # 只用 translation 部分
-            points = all_poses_for_obj[indices, :3]
-            fps_idx = self._farthest_point_sampling(points, num_samples)
-            return [indices[i.item()] for i in fps_idx]
-        elif strategy == "nearest_point":
-            points = all_poses_for_obj[indices, :3]
-            nps_idx = self._nearest_point_sampling(points, num_samples)
-            return [indices[i.item()] for i in nps_idx]
-        else:
-            # 默认 random
-            perm = torch.randperm(n)[:num_samples]
-            return [indices[i] for i in perm]
+        """Wrapper to reuse shared sampling utilities."""
+        return sample_indices_from_available(indices, all_poses_for_obj, num_samples, strategy)
 
     def _sample_grasps_from_available(self, available_grasps: torch.Tensor) -> torch.Tensor:
-        """Samples a fixed number of grasps from the available set using the specified strategy."""
-        num_available = available_grasps.shape[0]
-        if num_available == 0:
-            return torch.zeros((self.num_grasps, 23), dtype=available_grasps.dtype, device=available_grasps.device)
-
-        if num_available >= self.num_grasps:
-            if self.grasp_sampling_strategy == "random":
-                indices = torch.randperm(num_available)[:self.num_grasps]
-            elif self.grasp_sampling_strategy == "first_n":
-                indices = torch.arange(self.num_grasps)
-            elif self.grasp_sampling_strategy == "farthest_point":
-                indices = self._farthest_point_sampling(available_grasps[:, :3], self.num_grasps)
-            elif self.grasp_sampling_strategy == "nearest_point":
-                indices = self._nearest_point_sampling(available_grasps[:, :3], self.num_grasps)
-            else: # Fallback for "repeat"
-                indices = torch.arange(self.num_grasps) % num_available
-            return available_grasps[indices]
-        else: # num_available < num_grasps
-            if self.grasp_sampling_strategy == "repeat":
-                indices = torch.arange(self.num_grasps) % num_available
-            elif self.grasp_sampling_strategy in ["farthest_point", "nearest_point"]:
-                all_indices = torch.arange(num_available, device=available_grasps.device)
-                remaining_needed = self.num_grasps - num_available
-                additional_indices = torch.randint(0, num_available, (remaining_needed,), device=available_grasps.device)
-                indices = torch.cat([all_indices, additional_indices])
-            else: # "random" or "first_n"
-                indices = torch.randint(0, num_available, (self.num_grasps,))
-            return available_grasps[indices]
+        """Wrapper around shared grasp sampling helper."""
+        return sample_grasps_from_available(
+            available_grasps,
+            self.num_grasps,
+            self.grasp_sampling_strategy
+        )
 
     def _get_fixed_number_hand_poses(self, scene_id: str, object_code: str,
                                    grasp_indices: Optional[List[int]] = None) -> torch.Tensor:
@@ -415,7 +289,11 @@ class SceneLeapPlusDataset(_BaseLeapProDataset):
             if len(valid_indices) >= self.num_grasps:
                 return all_poses_tensor[torch.tensor(valid_indices[:self.num_grasps], dtype=torch.long)]
 
-        return self._sample_grasps_from_available(all_poses_tensor)
+        return sample_grasps_from_available(
+            all_poses_tensor,
+            self.num_grasps,
+            self.grasp_sampling_strategy
+        )
 
     def __getitem__(self, idx):
         """Retrieves an item, returning a fixed number of grasps for an object in a scene view."""

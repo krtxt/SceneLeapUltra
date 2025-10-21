@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+使用简体中文回答
+
 ## Project Overview
 
 SceneLeapUltra is a PyTorch Lightning-based project for generating grasp poses using diffusion models. The project supports two main model architectures:

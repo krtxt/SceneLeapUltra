@@ -1,3 +1,5 @@
+使用简体中文回答
+
 # Repository Guidelines
 
 ## Project Structure & Module Organization

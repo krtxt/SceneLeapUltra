@@ -4,3 +4,5 @@ alwaysApply: true
 运行测试前，用source ~/.bashrc && conda activate DexGrasp 激活环境
 
 所有测试代码临时代码脚本放在tests文件夹底下
+
+在我让写md文档的时候才写，写的话放在docs文件夹底下

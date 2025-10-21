@@ -2,6 +2,8 @@ import logging
 from torch.utils.data import Dataset
 from .sceneleappro_cached import SceneLeapProDatasetCached, ForMatchSceneLeapProDatasetCached
 from .sceneleapplus_cached import SceneLeapPlusDatasetCached
+from .objectcentric_grasp_dataset import ObjectCentricGraspDataset
+from .objectcentric_grasp_cached import ObjectCentricGraspDatasetCached
 
 def build_datasets(data_cfg, stage=None):
     """
@@ -169,6 +171,55 @@ def build_datasets(data_cfg, stage=None):
             logging.info(f"Test set size: {len(test_set)}")
 
         return train_set, val_set, test_set
+    elif getattr(data_cfg, 'name', '').lower() == "objectcentric":
+        train_set = val_set = test_set = None
+
+        if stage in ["fit", None]:
+            train_set = _build_objectcentric_dataset(
+                data_cfg.train,
+                default_cache_mode="train"
+            )
+            val_set = _build_objectcentric_dataset(
+                data_cfg.val,
+                default_cache_mode="val"
+            )
+            logging.info(f"Train set size: {len(train_set)}")
+            logging.info(f"Validation set size: {len(val_set)}")
+
+        if stage in ["test", None]:
+            test_set = _build_objectcentric_dataset(
+                data_cfg.test,
+                default_cache_mode="test"
+            )
+            logging.info(f"Test set size: {len(test_set)}")
+
+        return train_set, val_set, test_set
     else:
         logging.error(f"Unknown dataset name: {getattr(data_cfg, 'name', None)}")
         return None, None, None
+
+
+def _build_objectcentric_dataset(cfg, default_cache_mode: str = "train"):
+    common_kwargs = dict(
+        succ_grasp_dir=cfg.succ_grasp_dir,
+        obj_root_dir=cfg.obj_root_dir,
+        num_grasps=getattr(cfg, 'num_grasps', 8),
+        max_points=getattr(cfg, 'max_points', 4096),
+        max_grasps_per_object=getattr(cfg, 'max_grasps_per_object', None),
+        mesh_scale=getattr(cfg, 'mesh_scale', 0.1),
+        grasp_sampling_strategy=getattr(cfg, 'grasp_sampling_strategy', 'random'),
+        use_exhaustive_sampling=getattr(cfg, 'use_exhaustive_sampling', False),
+        exhaustive_sampling_strategy=getattr(cfg, 'exhaustive_sampling_strategy', 'sequential'),
+        object_sampling_ratio=getattr(cfg, 'object_sampling_ratio', 0.8),
+        table_size=getattr(cfg, 'table_size', 0.4)
+    )
+
+    if getattr(cfg, 'use_cached', False):
+        return ObjectCentricGraspDatasetCached(
+            **common_kwargs,
+            cache_root_dir=getattr(cfg, 'cache_root_dir', None),
+            cache_version=getattr(cfg, 'cache_version', 'v1.0_objectcentric'),
+            cache_mode=getattr(cfg, 'cache_mode', default_cache_mode)
+        )
+
+    return ObjectCentricGraspDataset(**common_kwargs)

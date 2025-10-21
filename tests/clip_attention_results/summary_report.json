@@ -1,0 +1,461 @@
+{
+  "total_samples": 50,
+  "statistics": [
+    {
+      "sample_idx": 1,
+      "dataset_idx": 654,
+      "scene_id": "scene_1390628853_1189852120",
+      "obj_code": "a_red_teddy_bear_507faefe845f43b48efdfda91bb0f3e6",
+      "positive_prompt": "a red teddy bear",
+      "max_similarity": 0.21502640843391418,
+      "mean_similarity": 0.09086383305490017
+    },
+    {
+      "sample_idx": 2,
+      "dataset_idx": 114,
+      "scene_id": "scene_1306673659_4105806965",
+      "obj_code": "a_brown_cage_e761496eb1a24b1e89b27bb22a3a8a84",
+      "positive_prompt": "a brown cage",
+      "max_similarity": 0.20342804491519928,
+      "mean_similarity": 0.1480904595553875
+    },
+    {
+      "sample_idx": 3,
+      "dataset_idx": 25,
+      "scene_id": "scene_2770116662_4080083331",
+      "obj_code": "a_wooden_barrel_12ce286c8fd949609d31d7819a7ddac3",
+      "positive_prompt": "a wooden barrel",
+      "max_similarity": 0.3173140585422516,
+      "mean_similarity": 0.1850958999991417
+    },
+    {
+      "sample_idx": 4,
+      "dataset_idx": 759,
+      "scene_id": "scene_2512269919_3523929642",
+      "obj_code": "a_yellow_box_e5343992c322442fa3f9fe9a5b301d4a",
+      "positive_prompt": "a yellow box",
+      "max_similarity": 0.2187594324350357,
+      "mean_similarity": 0.14572618320584296
+    },
+    {
+      "sample_idx": 5,
+      "dataset_idx": 281,
+      "scene_id": "scene_3102880606_1051781546",
+      "obj_code": "a_black_barrel_edfc6fc136b84e3c8ce96beb7646c492",
+      "positive_prompt": "a black barrel",
+      "max_similarity": 0.1933252364397049,
+      "mean_similarity": 0.15406551986932754
+    },
+    {
+      "sample_idx": 6,
+      "dataset_idx": 250,
+      "scene_id": "scene_2832064285_1781670976_initial_collisions",
+      "obj_code": "a_gray_container_1d74248aec9344b3b6adf47238b61a4f",
+      "positive_prompt": "a gray container",
+      "max_similarity": 0.26106199622154236,
+      "mean_similarity": 0.21085878252983092
+    },
+    {
+      "sample_idx": 7,
+      "dataset_idx": 228,
+      "scene_id": "scene_2850232737_3672423948",
+      "obj_code": "a_grey_sphere_b0b15988b5984d8eaf1e33b68cd2931d",
+      "positive_prompt": "a grey sphere",
+      "max_similarity": 0.2919981777667999,
+      "mean_similarity": 0.21291024327278138
+    },
+    {
+      "sample_idx": 8,
+      "dataset_idx": 142,
+      "scene_id": "scene_3488101046_4033476483",
+      "obj_code": "a_lamp_dae0f9fcbfa549729bd2555b7ccdddb9",
+      "positive_prompt": "a lamp",
+      "max_similarity": 0.23964183032512665,
+      "mean_similarity": 0.17069366812705994
+    },
+    {
+      "sample_idx": 9,
+      "dataset_idx": 754,
+      "scene_id": "scene_2512269919_3523929642",
+      "obj_code": "a_white_rock_9cdc6fe277b14d8984bad6db1ed1fe5d",
+      "positive_prompt": "a white rock",
+      "max_similarity": 0.2529948651790619,
+      "mean_similarity": 0.19547564268112183
+    },
+    {
+      "sample_idx": 10,
+      "dataset_idx": 104,
+      "scene_id": "scene_1306673659_4105806965",
+      "obj_code": "a_gray_cube_9ba4901fb9af4b43997a414fcb6e63d3",
+      "positive_prompt": "a gray cube",
+      "max_similarity": 0.2779630422592163,
+      "mean_similarity": 0.19503049552440643
+    },
+    {
+      "sample_idx": 11,
+      "dataset_idx": 692,
+      "scene_id": "scene_1139746500_309062935",
+      "obj_code": "a_gray_box_6933356027d2419faae28ddb61664a91",
+      "positive_prompt": "a gray box",
+      "max_similarity": 0.29807165265083313,
+      "mean_similarity": 0.19844884157180787
+    },
+    {
+      "sample_idx": 12,
+      "dataset_idx": 758,
+      "scene_id": "scene_2512269919_3523929642",
+      "obj_code": "a_yellow_box_e5343992c322442fa3f9fe9a5b301d4a",
+      "positive_prompt": "a yellow box",
+      "max_similarity": 0.2069036066532135,
+      "mean_similarity": 0.14204185262322425
+    },
+    {
+      "sample_idx": 13,
+      "dataset_idx": 558,
+      "scene_id": "scene_1344078210_800154751",
+      "obj_code": "a_black_table_49071009d5634081805366f56ba38613",
+      "positive_prompt": "a black table",
+      "max_similarity": 0.2550167739391327,
+      "mean_similarity": 0.18041313648223878
+    },
+    {
+      "sample_idx": 14,
+      "dataset_idx": 89,
+      "scene_id": "scene_1228269514_3107142519",
+      "obj_code": "a_yellow_teapot_211d140cffd14d72a30e9e0350e877df",
+      "positive_prompt": "a yellow teapot",
+      "max_similarity": 0.16278189420700073,
+      "mean_similarity": 0.09061575446277857
+    },
+    {
+      "sample_idx": 15,
+      "dataset_idx": 604,
+      "scene_id": "scene_1507352004_993724909",
+      "obj_code": "a_gray_box_80cd1dc2cc3d41c4bbfba12cd535f687",
+      "positive_prompt": "a gray box",
+      "max_similarity": 0.27591994404792786,
+      "mean_similarity": 0.1904270425438881
+    },
+    {
+      "sample_idx": 16,
+      "dataset_idx": 432,
+      "scene_id": "scene_892429652_2081484801",
+      "obj_code": "a_red_box_b4ec61e238cd48aaadf29758d418f5d7",
+      "positive_prompt": "a red box",
+      "max_similarity": 0.17147773504257202,
+      "mean_similarity": 0.12465271547436714
+    },
+    {
+      "sample_idx": 17,
+      "dataset_idx": 32,
+      "scene_id": "scene_2770116662_4080083331",
+      "obj_code": "a_wooden_table_fe7b26ff21dc42b09289e042efae7143",
+      "positive_prompt": "a wooden table",
+      "max_similarity": 0.2863622307777405,
+      "mean_similarity": 0.20823486417531967
+    },
+    {
+      "sample_idx": 18,
+      "dataset_idx": 30,
+      "scene_id": "scene_2770116662_4080083331",
+      "obj_code": "a_wooden_table_fe7b26ff21dc42b09289e042efae7143",
+      "positive_prompt": "a wooden table",
+      "max_similarity": 0.251947820186615,
+      "mean_similarity": 0.1949713397026062
+    },
+    {
+      "sample_idx": 19,
+      "dataset_idx": 95,
+      "scene_id": "scene_1306673659_4105806965",
+      "obj_code": "a_brown_brick_6eceb2127a2f4206a46912ad2bbdabec",
+      "positive_prompt": "a brown brick",
+      "max_similarity": 0.17119362950325012,
+      "mean_similarity": 0.1279201915860176
+    },
+    {
+      "sample_idx": 20,
+      "dataset_idx": 223,
+      "scene_id": "scene_2850232737_3672423948",
+      "obj_code": "a_yellow_ball_e699680b6dd14e1eb0f08635adc836b0",
+      "positive_prompt": "a yellow ball",
+      "max_similarity": 0.23666998744010925,
+      "mean_similarity": 0.1128339409828186
+    },
+    {
+      "sample_idx": 21,
+      "dataset_idx": 238,
+      "scene_id": "scene_2850232737_3672423948",
+      "obj_code": "a_metal_box_bab791b463354068b22877a9afe03463",
+      "positive_prompt": "a metal box",
+      "max_similarity": 0.2992299497127533,
+      "mean_similarity": 0.17688684448599815
+    },
+    {
+      "sample_idx": 22,
+      "dataset_idx": 517,
+      "scene_id": "scene_337667532_3722773580",
+      "obj_code": "a_red_chair_3dd6bc4a6f3445a1ab765261b2a5df84",
+      "positive_prompt": "a red chair",
+      "max_similarity": 0.17333590984344482,
+      "mean_similarity": 0.11850664552301168
+    },
+    {
+      "sample_idx": 23,
+      "dataset_idx": 616,
+      "scene_id": "scene_1535349285_3449624450",
+      "obj_code": "a_black_box_0419e714bb784af1b92777bdf96cd693",
+      "positive_prompt": "a black box",
+      "max_similarity": 0.21802927553653717,
+      "mean_similarity": 0.13946833834052086
+    },
+    {
+      "sample_idx": 24,
+      "dataset_idx": 27,
+      "scene_id": "scene_2770116662_4080083331",
+      "obj_code": "a_wooden_barrel_12ce286c8fd949609d31d7819a7ddac3",
+      "positive_prompt": "a wooden barrel",
+      "max_similarity": 0.35334843397140503,
+      "mean_similarity": 0.18215808451175688
+    },
+    {
+      "sample_idx": 25,
+      "dataset_idx": 574,
+      "scene_id": "scene_692260481_3070058541",
+      "obj_code": "a_gray_box_3a6f0e6ba27d450e8c659c500b2f2cb5",
+      "positive_prompt": "a gray box",
+      "max_similarity": 0.29091134667396545,
+      "mean_similarity": 0.17049768045544625
+    },
+    {
+      "sample_idx": 26,
+      "dataset_idx": 203,
+      "scene_id": "scene_1016092766_3963745604",
+      "obj_code": "a_yellow_chair_ec1ed3bbb64540cb82720fcd902b48c1",
+      "positive_prompt": "a yellow chair",
+      "max_similarity": 0.1756429672241211,
+      "mean_similarity": 0.11017912454903125
+    },
+    {
+      "sample_idx": 27,
+      "dataset_idx": 733,
+      "scene_id": "scene_2384578616_632022290",
+      "obj_code": "a_wooden_stool_3224038611c94142bf382861ee816119",
+      "positive_prompt": "a wooden stool",
+      "max_similarity": 0.28900566697120667,
+      "mean_similarity": 0.20683415561914445
+    },
+    {
+      "sample_idx": 28,
+      "dataset_idx": 665,
+      "scene_id": "scene_3266470693_2882052095",
+      "obj_code": "a_brown_toy_train_5d3588fb7f364bfc8fe9513b1ba17982",
+      "positive_prompt": "a brown toy train",
+      "max_similarity": 0.20701964199543,
+      "mean_similarity": 0.12167375326156617
+    },
+    {
+      "sample_idx": 29,
+      "dataset_idx": 718,
+      "scene_id": "scene_2384578616_632022290",
+      "obj_code": "a_wooden_crate_bea4b73cf440402faabfcb09e3ae8ea5",
+      "positive_prompt": "a wooden crate",
+      "max_similarity": 0.3168780207633972,
+      "mean_similarity": 0.18877362608909606
+    },
+    {
+      "sample_idx": 30,
+      "dataset_idx": 429,
+      "scene_id": "scene_892429652_2081484801",
+      "obj_code": "a_brown_chair_0e861d7e379641db81e24a39f679cddd",
+      "positive_prompt": "a brown chair",
+      "max_similarity": 0.20701010525226593,
+      "mean_similarity": 0.16877452284097672
+    },
+    {
+      "sample_idx": 31,
+      "dataset_idx": 225,
+      "scene_id": "scene_2850232737_3672423948",
+      "obj_code": "a_grey_sphere_b0b15988b5984d8eaf1e33b68cd2931d",
+      "positive_prompt": "a grey sphere",
+      "max_similarity": 0.31810736656188965,
+      "mean_similarity": 0.2317592543363571
+    },
+    {
+      "sample_idx": 32,
+      "dataset_idx": 459,
+      "scene_id": "scene_2067695882_1935406358",
+      "obj_code": "a_camera_73af707b13d642519121bea13b60b723",
+      "positive_prompt": "a camera",
+      "max_similarity": 0.2524929344654083,
+      "mean_similarity": 0.17896243393421174
+    },
+    {
+      "sample_idx": 33,
+      "dataset_idx": 603,
+      "scene_id": "scene_1507352004_993724909",
+      "obj_code": "a_gray_box_80cd1dc2cc3d41c4bbfba12cd535f687",
+      "positive_prompt": "a gray box",
+      "max_similarity": 0.2669009566307068,
+      "mean_similarity": 0.19107950896024703
+    },
+    {
+      "sample_idx": 34,
+      "dataset_idx": 284,
+      "scene_id": "scene_3102880606_1051781546",
+      "obj_code": "a_black_barrel_edfc6fc136b84e3c8ce96beb7646c492",
+      "positive_prompt": "a black barrel",
+      "max_similarity": 0.19638054072856903,
+      "mean_similarity": 0.12966934189200402
+    },
+    {
+      "sample_idx": 35,
+      "dataset_idx": 828,
+      "scene_id": "scene_29261944_176781472",
+      "obj_code": "a_camera_7e13fdd0fb83412db002df1a2b02da1a",
+      "positive_prompt": "a camera",
+      "max_similarity": 0.18921704590320587,
+      "mean_similarity": 0.15476641684770584
+    },
+    {
+      "sample_idx": 36,
+      "dataset_idx": 890,
+      "scene_id": "scene_1384821545_3308618948",
+      "obj_code": "a_blue_rock_fc9cf75ca5264a87b1f20351c0d79290",
+      "positive_prompt": "a blue rock",
+      "max_similarity": 0.3108053207397461,
+      "mean_similarity": 0.21481280595064164
+    },
+    {
+      "sample_idx": 37,
+      "dataset_idx": 6,
+      "scene_id": "scene_1825664650_3401303171",
+      "obj_code": "a_helmet_13d34af0aabf442c93b111472d0df7b6",
+      "positive_prompt": "a helmet",
+      "max_similarity": 0.26609882712364197,
+      "mean_similarity": 0.18900120705366136
+    },
+    {
+      "sample_idx": 38,
+      "dataset_idx": 777,
+      "scene_id": "scene_1670955774_2055443977",
+      "obj_code": "a_wooden_barrel_9c398499b0f64f3cadcc5f7b4734f19e",
+      "positive_prompt": "a wooden barrel",
+      "max_similarity": 0.2907005846500397,
+      "mean_similarity": 0.21238804578781129
+    },
+    {
+      "sample_idx": 39,
+      "dataset_idx": 825,
+      "scene_id": "scene_29261944_176781472",
+      "obj_code": "a_camera_7e13fdd0fb83412db002df1a2b02da1a",
+      "positive_prompt": "a camera",
+      "max_similarity": 0.20941004157066345,
+      "mean_similarity": 0.154775447845459
+    },
+    {
+      "sample_idx": 40,
+      "dataset_idx": 163,
+      "scene_id": "scene_4126563341_2180434338",
+      "obj_code": "a_grey_cylinder_5a3ba8238ebf49e8ad625f935ecd761f",
+      "positive_prompt": "a grey cylinder",
+      "max_similarity": 0.26253029704093933,
+      "mean_similarity": 0.21279416382312774
+    },
+    {
+      "sample_idx": 41,
+      "dataset_idx": 714,
+      "scene_id": "scene_1139746500_309062935",
+      "obj_code": "a_gray_box_0d99bde8edc94e9eb239e172e5e3fc9b",
+      "positive_prompt": "a gray box",
+      "max_similarity": 0.2604372203350067,
+      "mean_similarity": 0.20104367434978485
+    },
+    {
+      "sample_idx": 42,
+      "dataset_idx": 348,
+      "scene_id": "scene_769009726_80656940",
+      "obj_code": "a_black_barrel_d7b6367f7e4247119c32479e14d62008",
+      "positive_prompt": "a black barrel",
+      "max_similarity": 0.23999673128128052,
+      "mean_similarity": 0.1487827156484127
+    },
+    {
+      "sample_idx": 43,
+      "dataset_idx": 159,
+      "scene_id": "scene_4126563341_2180434338",
+      "obj_code": "a_purple_chair_ef7025ecb056481d83d257f7e2bf3400",
+      "positive_prompt": "a purple chair",
+      "max_similarity": 0.2612387239933014,
+      "mean_similarity": 0.1480641582608223
+    },
+    {
+      "sample_idx": 44,
+      "dataset_idx": 220,
+      "scene_id": "scene_2850232737_3672423948",
+      "obj_code": "a_yellow_ball_e699680b6dd14e1eb0f08635adc836b0",
+      "positive_prompt": "a yellow ball",
+      "max_similarity": 0.236441507935524,
+      "mean_similarity": 0.12574543200433255
+    },
+    {
+      "sample_idx": 45,
+      "dataset_idx": 781,
+      "scene_id": "scene_1670955774_2055443977",
+      "obj_code": "a_black_suitcase_92042891266c4fc09ee4d6c54330beb2",
+      "positive_prompt": "a black suitcase",
+      "max_similarity": 0.23095791041851044,
+      "mean_similarity": 0.15976986899971962
+    },
+    {
+      "sample_idx": 46,
+      "dataset_idx": 344,
+      "scene_id": "scene_769009726_80656940",
+      "obj_code": "a_wooden_barrel_dc2414d6a7c84298a58e3d7e1a96a4a0",
+      "positive_prompt": "a wooden barrel",
+      "max_similarity": 0.3112185001373291,
+      "mean_similarity": 0.21303997963666915
+    },
+    {
+      "sample_idx": 47,
+      "dataset_idx": 94,
+      "scene_id": "scene_1228269514_3107142519",
+      "obj_code": "a_record_player_495a62d8f03f48788ae31e9d50648b9c",
+      "positive_prompt": "a record player",
+      "max_similarity": 0.22026824951171875,
+      "mean_similarity": 0.17065696388483048
+    },
+    {
+      "sample_idx": 48,
+      "dataset_idx": 389,
+      "scene_id": "scene_1913824178_3542614148",
+      "obj_code": "a_computer_mouse_4cb647cf82544120bc1ed4797dcf0ba8",
+      "positive_prompt": "a computer mouse",
+      "max_similarity": 0.2189265489578247,
+      "mean_similarity": 0.13886454612016677
+    },
+    {
+      "sample_idx": 49,
+      "dataset_idx": 99,
+      "scene_id": "scene_1306673659_4105806965",
+      "obj_code": "a_brown_brick_6eceb2127a2f4206a46912ad2bbdabec",
+      "positive_prompt": "a brown brick",
+      "max_similarity": 0.18062084913253784,
+      "mean_similarity": 0.13444951102137565
+    },
+    {
+      "sample_idx": 50,
+      "dataset_idx": 367,
+      "scene_id": "scene_852968604_1548678782",
+      "obj_code": "a_brown_box_e87868c51d4f495f925a49ce37c51240",
+      "positive_prompt": "a brown box",
+      "max_similarity": 0.2717301845550537,
+      "mean_similarity": 0.1787618699669838
+    }
+  ],
+  "summary": {
+    "avg_max_similarity": 0.24625500053167343,
+    "avg_mean_similarity": 0.1670462105885148,
+    "std_max_similarity": 0.04650270126080037,
+    "std_mean_similarity": 0.035132532989041995
+  }
+}

@@ -52,17 +52,55 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
     :param max_period: controls the minimum frequency of the embeddings.
     :return: an [N x dim] Tensor of positional embeddings.
     """
+    import logging
+
+    # Validate inputs
+    if torch.isnan(timesteps).any() or torch.isinf(timesteps).any():
+        logging.error(f"[NaN Detection] Invalid timesteps in timestep_embedding")
+        logging.error(f"  timesteps: {timesteps}")
+        logging.error(f"  NaN count: {torch.isnan(timesteps).sum().item()}, Inf count: {torch.isinf(timesteps).sum().item()}")
+        raise RuntimeError("Invalid timesteps in timestep_embedding")
+
     if not repeat_only:
         half = dim // 2
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
         ).to(device=timesteps.device)
+
+        # Check freqs for NaN
+        if torch.isnan(freqs).any() or torch.isinf(freqs).any():
+            logging.error(f"[NaN Detection] NaN/Inf in frequency computation")
+            logging.error(f"  freqs: {freqs}")
+            logging.error(f"  NaN count: {torch.isnan(freqs).sum().item()}, Inf count: {torch.isinf(freqs).sum().item()}")
+            raise RuntimeError("NaN/Inf in timestep embedding frequency computation")
+
         args = timesteps[:, None].float() * freqs[None]
+
+        # Check args for NaN
+        if torch.isnan(args).any() or torch.isinf(args).any():
+            logging.error(f"[NaN Detection] NaN/Inf in timestep embedding args")
+            logging.error(f"  args shape: {args.shape}")
+            logging.error(f"  NaN count: {torch.isnan(args).sum().item()}, Inf count: {torch.isinf(args).sum().item()}")
+            logging.error(f"  timesteps: {timesteps}")
+            logging.error(f"  freqs: {freqs}")
+            raise RuntimeError("NaN/Inf in timestep embedding args")
+
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+
+        # Check embedding for NaN
+        if torch.isnan(embedding).any() or torch.isinf(embedding).any():
+            logging.error(f"[NaN Detection] NaN/Inf in timestep embedding output")
+            logging.error(f"  embedding shape: {embedding.shape}")
+            logging.error(f"  NaN count: {torch.isnan(embedding).sum().item()}, Inf count: {torch.isinf(embedding).sum().item()}")
+            raise RuntimeError("NaN/Inf in timestep embedding output")
+
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
     else:
         embedding = repeat(timesteps, 'b -> b d', d=dim)
+
+    logging.debug(f"[timestep_embedding] Output: shape={embedding.shape}, min={embedding.min():.6f}, max={embedding.max():.6f}, mean={embedding.mean():.6f}")
+
     return embedding
 
 class ResBlock(nn.Module):

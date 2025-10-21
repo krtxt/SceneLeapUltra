@@ -189,7 +189,7 @@ class DiTBlock(nn.Module):
             self.norm4 = nn.LayerNorm(d_model)
     
     def forward(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
-                scene_context: Optional[torch.Tensor] = None, 
+                scene_context: Optional[torch.Tensor] = None,
                 text_context: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
@@ -205,31 +205,80 @@ class DiTBlock(nn.Module):
             norm_x = self.norm1(x, time_emb)
         else:
             norm_x = self.norm1(x)
-        x = x + self.self_attention(norm_x)
-        
+
+        if torch.isnan(norm_x).any():
+            logging.error(f"[DiTBlock NaN] NaN after norm1")
+            logging.error(f"  Input x stats: min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}")
+            if time_emb is not None:
+                logging.error(f"  time_emb stats: min={time_emb.min():.6f}, max={time_emb.max():.6f}, mean={time_emb.mean():.6f}")
+            raise RuntimeError("NaN detected in DiTBlock after norm1")
+
+        attn_out = self.self_attention(norm_x)
+        if torch.isnan(attn_out).any():
+            logging.error(f"[DiTBlock NaN] NaN after self_attention")
+            logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+            raise RuntimeError("NaN detected in DiTBlock self_attention")
+
+        x = x + attn_out
+
         # Cross-attention with scene features
         if scene_context is not None:
             if self.use_adaptive_norm and time_emb is not None:
                 norm_x = self.norm2(x, time_emb)
             else:
                 norm_x = self.norm2(x)
-            x = x + self.scene_cross_attention(norm_x, scene_context, scene_context)
-        
+
+            if torch.isnan(norm_x).any():
+                logging.error(f"[DiTBlock NaN] NaN after norm2")
+                raise RuntimeError("NaN detected in DiTBlock after norm2")
+
+            scene_attn_out = self.scene_cross_attention(norm_x, scene_context, scene_context)
+            if torch.isnan(scene_attn_out).any():
+                logging.error(f"[DiTBlock NaN] NaN after scene_cross_attention")
+                logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+                logging.error(f"  scene_context stats: min={scene_context.min():.6f}, max={scene_context.max():.6f}")
+                raise RuntimeError("NaN detected in DiTBlock scene_cross_attention")
+
+            x = x + scene_attn_out
+
         # Cross-attention with text features (if available)
         if text_context is not None:
             if self.use_adaptive_norm and time_emb is not None:
                 norm_x = self.norm3(x, time_emb)
             else:
                 norm_x = self.norm3(x)
-            x = x + self.text_cross_attention(norm_x, text_context, text_context)
-        
+
+            if torch.isnan(norm_x).any():
+                logging.error(f"[DiTBlock NaN] NaN after norm3")
+                raise RuntimeError("NaN detected in DiTBlock after norm3")
+
+            text_attn_out = self.text_cross_attention(norm_x, text_context, text_context)
+            if torch.isnan(text_attn_out).any():
+                logging.error(f"[DiTBlock NaN] NaN after text_cross_attention")
+                logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+                logging.error(f"  text_context stats: min={text_context.min():.6f}, max={text_context.max():.6f}")
+                raise RuntimeError("NaN detected in DiTBlock text_cross_attention")
+
+            x = x + text_attn_out
+
         # Feed-forward network
         if self.use_adaptive_norm and time_emb is not None:
             norm_x = self.norm4(x, time_emb)
         else:
             norm_x = self.norm4(x)
-        x = x + self.feed_forward(norm_x)
-        
+
+        if torch.isnan(norm_x).any():
+            logging.error(f"[DiTBlock NaN] NaN after norm4")
+            raise RuntimeError("NaN detected in DiTBlock after norm4")
+
+        ff_out = self.feed_forward(norm_x)
+        if torch.isnan(ff_out).any():
+            logging.error(f"[DiTBlock NaN] NaN after feed_forward")
+            logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+            raise RuntimeError("NaN detected in DiTBlock feed_forward")
+
+        x = x + ff_out
+
         return x
 
 
@@ -504,13 +553,30 @@ class DiTModel(nn.Module):
         try:
             # 1. Tokenize grasp poses
             grasp_tokens = self.grasp_tokenizer(x_t)  # (B, num_grasps, d_model)
+            if torch.isnan(grasp_tokens).any():
+                self.logger.error(f"[NaN Detection] NaN detected in grasp_tokens after tokenization")
+                self.logger.error(f"  Input x_t stats: min={x_t.min():.6f}, max={x_t.max():.6f}, mean={x_t.mean():.6f}, std={x_t.std():.6f}")
+                self.logger.error(f"  grasp_tokens shape: {grasp_tokens.shape}")
+                self.logger.error(f"  NaN count: {torch.isnan(grasp_tokens).sum().item()}/{grasp_tokens.numel()}")
+                raise DiTConditioningError("NaN detected in grasp tokenization")
             
             # 2. Add positional embeddings
             if self.pos_embedding is not None:
                 grasp_tokens = self.pos_embedding(grasp_tokens)
+                if torch.isnan(grasp_tokens).any():
+                    self.logger.error(f"[NaN Detection] NaN detected in grasp_tokens after positional embedding")
+                    self.logger.error(f"  grasp_tokens shape: {grasp_tokens.shape}")
+                    self.logger.error(f"  NaN count: {torch.isnan(grasp_tokens).sum().item()}/{grasp_tokens.numel()}")
+                    raise DiTConditioningError("NaN detected in positional embedding")
             
             # 3. Get timestep embeddings
             time_emb = self.time_embedding(ts)  # (B, time_embed_dim)
+            if torch.isnan(time_emb).any():
+                self.logger.error(f"[NaN Detection] NaN detected in time_emb")
+                self.logger.error(f"  timesteps ts: {ts}")
+                self.logger.error(f"  time_emb shape: {time_emb.shape}")
+                self.logger.error(f"  NaN count: {torch.isnan(time_emb).sum().item()}/{time_emb.numel()}")
+                raise DiTConditioningError("NaN detected in timestep embedding")
             
             # 4. Get conditioning features with error handling
             scene_context = data.get("scene_cond")  # (B, N_points, d_model)
@@ -523,6 +589,14 @@ class DiTModel(nn.Module):
                 if scene_context.device != model_device:
                     scene_context = scene_context.to(model_device)
                     self.logger.debug(f"Moved scene_cond to device {model_device}")
+                
+                # Check for NaN in scene context
+                if torch.isnan(scene_context).any():
+                    self.logger.error(f"[NaN Detection] NaN detected in scene_context")
+                    self.logger.error(f"  scene_context shape: {scene_context.shape}")
+                    self.logger.error(f"  scene_context stats: min={scene_context[~torch.isnan(scene_context)].min():.6f} if torch.isnan(scene_context).sum() < scene_context.numel() else 'all NaN'")
+                    self.logger.error(f"  NaN count: {torch.isnan(scene_context).sum().item()}/{scene_context.numel()}")
+                    raise DiTConditioningError("NaN detected in scene conditioning features")
             
             # Prepare text context for cross-attention
             if text_context is not None and self.use_text_condition:
@@ -541,13 +615,30 @@ class DiTModel(nn.Module):
             x = grasp_tokens
             for i, block in enumerate(self.dit_blocks):
                 try:
+                    logging.debug(f"[DiT Block {i}/{self.num_layers}] Processing...")
+                    logging.debug(f"  Input stats: shape={x.shape}, min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}, std={x.std():.6f}")
+
                     x = block(
                         x=x,
                         time_emb=time_emb if self.use_adaptive_norm else None,
                         scene_context=scene_context,
                         text_context=text_context
                     )
+
+                    # Check for NaN after each block
+                    if torch.isnan(x).any():
+                        logging.error(f"[NaN Detection] NaN detected after DiT block {i}")
+                        logging.error(f"  x shape: {x.shape}")
+                        logging.error(f"  NaN count: {torch.isnan(x).sum().item()}/{x.numel()}")
+                        logging.error(f"  Block index: {i}/{self.num_layers}")
+                        raise DiTConditioningError(f"NaN detected in DiT block {i}")
+
+                    logging.debug(f"[DiT Block {i}/{self.num_layers}] Output stats: min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}, std={x.std():.6f}")
+
+                except DiTConditioningError:
+                    raise
                 except Exception as e:
+                    logging.error(f"[DiT Block {i}] Error in block processing: {e}")
                     raise DiTConditioningError(f"Error in DiT block {i}: {e}")
             
             # 6. Output projection
@@ -597,50 +688,75 @@ class DiTModel(nn.Module):
             try:
                 if 'scene_pc' not in data or data['scene_pc'] is None:
                     raise DiTConditioningError("Missing scene_pc in conditioning data")
-                
+
                 scene_pc = data['scene_pc']
                 if not isinstance(scene_pc, torch.Tensor):
                     raise DiTConditioningError(f"scene_pc must be torch.Tensor, got {type(scene_pc)}")
-                
+
                 # Ensure proper device placement
                 model_device = self._get_device()
                 scene_pc = scene_pc.to(model_device, dtype=torch.float32)  # (B, N, 6) - xyz + rgb
-                
+
+                logging.debug(f"[Conditioning] scene_pc input: shape={scene_pc.shape}, min={scene_pc.min():.6f}, max={scene_pc.max():.6f}")
+
                 # Handle RGB inclusion
                 if not self.use_rgb:
                     scene_pc = scene_pc[..., :3]  # Keep only xyz
-                
+                    logging.debug(f"[Conditioning] Removed RGB, scene_pc shape: {scene_pc.shape}")
+
                 # Handle object mask inclusion in scene point cloud
                 if self.use_object_mask and 'object_mask' in data and data['object_mask'] is not None:
                     object_mask = data['object_mask'].to(model_device, dtype=torch.float32)
                     if object_mask.dim() == 2:
                         object_mask = object_mask.unsqueeze(-1)
                     pos = torch.cat([scene_pc, object_mask], dim=-1)
+                    logging.debug(f"[Conditioning] Added object_mask, pos shape: {pos.shape}")
                 else:
                     pos = scene_pc
-                
+
                 # Validate scene point cloud dimensions
                 if pos.dim() != 3:
                     raise DiTConditioningError(f"Scene point cloud must be 3D tensor, got {pos.dim()}D")
-                
-                # Log the final point cloud shape and configuration
-                # self.logger.info(f"Scene point cloud - Shape: {pos.shape}, use_rgb: {self.use_rgb}, use_object_mask: {self.use_object_mask}")
-                
+
+                logging.debug(f"[Conditioning] Final pos before backbone: shape={pos.shape}, min={pos.min():.6f}, max={pos.max():.6f}, mean={pos.mean():.6f}")
+
                 # Extract scene features
                 _, scene_feat = self.scene_model(pos)
+
+                # Check for NaN immediately after backbone
+                if torch.isnan(scene_feat).any():
+                    logging.error(f"[NaN Detection] NaN in scene_feat immediately after backbone")
+                    logging.error(f"  scene_feat shape: {scene_feat.shape}")
+                    logging.error(f"  NaN count: {torch.isnan(scene_feat).sum().item()}/{scene_feat.numel()}")
+                    logging.error(f"  pos stats: min={pos.min():.6f}, max={pos.max():.6f}")
+                    raise DiTConditioningError("NaN detected in backbone output")
+
+                logging.debug(f"[Conditioning] scene_feat after backbone: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}")
+
                 scene_feat = scene_feat.permute(0, 2, 1).contiguous()  # (B, N, C)
-                
+
                 # Validate scene features
                 if torch.isnan(scene_feat).any():
                     self.logger.warning("Scene features contain NaN values, replacing with zeros")
                     scene_feat = torch.where(torch.isnan(scene_feat), torch.zeros_like(scene_feat), scene_feat)
-                
+
                 if torch.isinf(scene_feat).any():
                     self.logger.warning("Scene features contain infinite values, clamping")
                     scene_feat = torch.clamp(scene_feat, -1e6, 1e6)
-                
+
+                logging.debug(f"[Conditioning] scene_feat after permute: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}")
+
                 # Project scene features to model dimension
                 scene_feat = self.scene_projection(scene_feat)  # (B, N, d_model)
+
+                # Check for NaN after projection
+                if torch.isnan(scene_feat).any():
+                    logging.error(f"[NaN Detection] NaN in scene_feat after projection")
+                    logging.error(f"  scene_feat shape: {scene_feat.shape}")
+                    logging.error(f"  NaN count: {torch.isnan(scene_feat).sum().item()}/{scene_feat.numel()}")
+                    raise DiTConditioningError("NaN detected in scene projection")
+
+                logging.debug(f"[Conditioning] scene_feat after projection: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}, mean={scene_feat.mean():.6f}")
                 
             except Exception as e:
                 self.logger.error(f"Scene feature extraction failed: {e}")
@@ -670,17 +786,37 @@ class DiTModel(nn.Module):
                 # Validate text prompts
                 if not isinstance(data['positive_prompt'], (list, tuple)):
                     raise DiTConditioningError(f"positive_prompt must be list or tuple, got {type(data['positive_prompt'])}")
-                
+
                 if len(data['positive_prompt']) != b:
                     raise DiTConditioningError(f"Batch size mismatch: scene features {b}, prompts {len(data['positive_prompt'])}")
 
+                logging.debug(f"[Text Conditioning] Encoding {b} positive prompts...")
+
                 # Encode positive and negative prompts
                 pos_text_features = self.text_encoder.encode_positive(data['positive_prompt'])
+
+                # Check for NaN after positive encoding
+                if torch.isnan(pos_text_features).any():
+                    logging.error(f"[NaN Detection] NaN in pos_text_features after encoding")
+                    logging.error(f"  pos_text_features shape: {pos_text_features.shape}")
+                    logging.error(f"  NaN count: {torch.isnan(pos_text_features).sum().item()}/{pos_text_features.numel()}")
+                    logging.error(f"  Prompts: {data['positive_prompt']}")
+                    raise DiTConditioningError("NaN detected in positive text encoding")
+
+                logging.debug(f"[Text Conditioning] pos_text_features: shape={pos_text_features.shape}, min={pos_text_features.min():.6f}, max={pos_text_features.max():.6f}, mean={pos_text_features.mean():.6f}")
+
                 neg_text_features = None
-                
+
                 if self.use_negative_prompts and 'negative_prompts' in data and data['negative_prompts'] is not None:
                     try:
+                        logging.debug(f"[Text Conditioning] Encoding negative prompts...")
                         neg_text_features = self.text_encoder.encode_negative(data['negative_prompts'])
+
+                        if torch.isnan(neg_text_features).any():
+                            logging.warning(f"[NaN Detection] NaN in neg_text_features, disabling negative prompts")
+                            neg_text_features = None
+                        else:
+                            logging.debug(f"[Text Conditioning] neg_text_features: shape={neg_text_features.shape}, min={neg_text_features.min():.6f}, max={neg_text_features.max():.6f}")
                     except Exception as e:
                         self.logger.warning(f"Negative prompt encoding failed: {e}. Continuing without negative prompts.")
                         neg_text_features = None
@@ -693,10 +829,31 @@ class DiTModel(nn.Module):
                 # Apply text dropout during training
                 model_device = self._get_device()
                 text_mask = torch.bernoulli(torch.full((b, 1), 1.0 - self.text_dropout_prob, device=model_device)) if self.training else torch.ones(b, 1, device=model_device)
-                
+
+                logging.debug(f"[Text Conditioning] text_mask sum: {text_mask.sum().item()}/{b} (dropout_prob={self.text_dropout_prob})")
+
                 # Process text features
                 scene_embedding = torch.mean(scene_feat, dim=1)
+
+                # Check scene_embedding for NaN
+                if torch.isnan(scene_embedding).any():
+                    logging.error(f"[NaN Detection] NaN in scene_embedding")
+                    logging.error(f"  scene_embedding shape: {scene_embedding.shape}")
+                    logging.error(f"  NaN count: {torch.isnan(scene_embedding).sum().item()}/{scene_embedding.numel()}")
+                    raise DiTConditioningError("NaN detected in scene embedding")
+
+                logging.debug(f"[Text Conditioning] scene_embedding: shape={scene_embedding.shape}, min={scene_embedding.min():.6f}, max={scene_embedding.max():.6f}")
+
                 pos_text_features_out, neg_pred = self.text_processor(pos_text_features, neg_text_features, scene_embedding)
+
+                # Check for NaN after text processor
+                if torch.isnan(pos_text_features_out).any():
+                    logging.error(f"[NaN Detection] NaN in pos_text_features_out after text_processor")
+                    logging.error(f"  pos_text_features_out shape: {pos_text_features_out.shape}")
+                    logging.error(f"  NaN count: {torch.isnan(pos_text_features_out).sum().item()}/{pos_text_features_out.numel()}")
+                    raise DiTConditioningError("NaN detected in text processor output")
+
+                logging.debug(f"[Text Conditioning] pos_text_features_out: shape={pos_text_features_out.shape}, min={pos_text_features_out.min():.6f}, max={pos_text_features_out.max():.6f}")
 
                 # Validate processed text features
                 if torch.isnan(pos_text_features_out).any():
@@ -709,6 +866,8 @@ class DiTModel(nn.Module):
                         "neg_pred": neg_pred,  # Predicted negative prompt for CFG
                         "neg_text_features": neg_text_features, # Original negative features for loss
                     })
+
+                logging.debug(f"[Text Conditioning] Final text_cond: shape={(pos_text_features_out * text_mask).shape}, active_count={text_mask.sum().item()}")
 
             except Exception as e:
                 self.logger.warning(f"Text encoding failed: {e}. Falling back to scene-only conditioning.")
