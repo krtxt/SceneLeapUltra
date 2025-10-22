@@ -1,8 +1,4 @@
-"""
-Object-Centric Grasp Dataset (Cached)
-
-提供 HDF5 缓存版本以加速 ObjectCentricGraspDataset 的数据加载。
-"""
+"""Compact cached dataset for object-centric grasp data."""
 
 import atexit
 import copy
@@ -28,15 +24,7 @@ from .utils.distributed_utils import (
 
 
 class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
-    """
-    ObjectCentricGraspDataset 的缓存版本，使用 HDF5 保存预处理结果。
-
-    特性：
-        - 固定数量抓取姿态
-        - 物体网格 / 桌面点云采样结果缓存
-        - 支持穷尽采样标记
-        - 兼容分布式训练缓存写入
-    """
+    """HDF5-backed cache for ObjectCentricGraspDataset."""
 
     def __init__(
         self,
@@ -56,7 +44,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         cache_version: str = "v1.0_objectcentric",
         cache_mode: str = "train",
     ):
-        logging.info("ObjectCentricGraspDatasetCached: 初始化开始...")
+        logging.info("ObjectCentricGraspDatasetCached: initializing...")
         self.cache_root_dir = cache_root_dir or succ_grasp_dir
         self.cache_version = cache_version
         self.cache_mode = cache_mode
@@ -96,9 +84,11 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         self.cache_manager = None
         self.hf: Optional[h5py.File] = None
         self.cache_loaded = False
+        self.cache_keys = self._build_cache_keys()
+        self.error_defaults = self._build_error_defaults()
 
         if self.num_items == 0:
-            logging.warning("ObjectCentricGraspDatasetCached: 数据集为空，不创建缓存。")
+            logging.warning("ObjectCentricGraspDatasetCached: dataset is empty, skipping cache.")
             return
 
         self.cache_manager = CacheManager(self._create_modified_config(), self.num_items)
@@ -107,7 +97,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
 
         self._ensure_cache_populated()
         logging.info(
-            "ObjectCentricGraspDatasetCached: 初始化完成。缓存状态：%s", self.cache_loaded
+            "ObjectCentricGraspDatasetCached: ready. cache_loaded=%s", self.cache_loaded
         )
 
     def _create_modified_config(self) -> CachedDatasetConfig:
@@ -131,7 +121,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
             self.cache_manager.cleanup()
         self.hf = None
         self.cache_loaded = False
-        logging.info("ObjectCentricGraspDatasetCached: 资源清理完成。")
+        logging.info("ObjectCentricGraspDatasetCached: cleanup complete.")
 
     def _ensure_cache_populated(self) -> None:
         if not self.cache_manager:
@@ -143,9 +133,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
 
         if is_distributed_training():
             if is_main_process():
-                logging.info(
-                    "ObjectCentricGraspDatasetCached: 主进程负责创建缓存 (DDP)。"
-                )
+                logging.info("ObjectCentricGraspDatasetCached: main process building cache (DDP).")
                 self.cache_manager.create_cache(self._create_cache_data)
             distributed_barrier()
             if self.cache_manager._is_cache_available():
@@ -155,13 +143,11 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
                     self.hf = h5py.File(self.cache_manager.cache_path, "r")
                     self.cache_loaded = True
                 except Exception as exc:
-                    logging.error(
-                        "ObjectCentricGraspDatasetCached: 分布式加载缓存失败: %s", exc
-                    )
+                    logging.error("ObjectCentricGraspDatasetCached: failed to load cache after DDP sync: %s", exc)
                     self.hf = None
                     self.cache_loaded = False
         else:
-            logging.info("ObjectCentricGraspDatasetCached: 单机模式创建缓存。")
+            logging.info("ObjectCentricGraspDatasetCached: building cache in single-process mode.")
             self.cache_manager.create_cache(self._create_cache_data)
             self.hf = self.cache_manager.get_file_handle()
             self.cache_loaded = self.cache_manager.is_loaded()
@@ -173,22 +159,14 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
             actual = len(self.hf)
             expected = self.num_items
             if actual < expected:
-                logging.warning(
-                    "ObjectCentricGraspDatasetCached: 缓存不完整 (%d/%d)。", actual, expected
-                )
+                logging.warning("ObjectCentricGraspDatasetCached: cache incomplete (%d/%d).", actual, expected)
                 return True
             return False
         except Exception as exc:
-            logging.error("ObjectCentricGraspDatasetCached: 检查缓存状态失败: %s", exc)
+            logging.error("ObjectCentricGraspDatasetCached: failed to inspect cache: %s", exc)
             return True
 
-    # --------------------------------------------------------------------- #
-    # 缓存写入
-    # --------------------------------------------------------------------- #
     def _create_cache_data(self, cache_path: str, num_items: int) -> None:
-        keys_to_cache = self._get_cache_keys()
-        error_defaults = self._get_default_error_values()
-
         with h5py.File(cache_path, "w") as hf:
             for idx in tqdm(range(num_items), desc="Caching ObjectCentric data"):
                 try:
@@ -198,21 +176,15 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
                             hf,
                             idx,
                             item.get("error", "Unknown error"),
-                            {k: item.get(k, error_defaults.get(k)) for k in keys_to_cache},
+                            {k: item.get(k, self.error_defaults.get(k)) for k in self.cache_keys},
                         )
                     else:
-                        self._create_data_group(hf, idx, item, keys_to_cache)
+                        self._create_data_group(hf, idx, item)
                 except Exception as exc:
-                    logging.error(
-                        "ObjectCentricGraspDatasetCached: 处理第 %d 项时出错：%s",
-                        idx,
-                        exc,
-                    )
-                    self._create_error_group(
-                        hf, idx, f"Cache creation error: {exc}", error_defaults
-                    )
+                    logging.error("ObjectCentricGraspDatasetCached: failed to process item %d: %s", idx, exc)
+                    self._create_error_group(hf, idx, f"Cache creation error: {exc}", self.error_defaults)
 
-    def _get_cache_keys(self) -> List[str]:
+    def _build_cache_keys(self) -> List[str]:
         base_keys = STANDARD_CACHE_KEYS.copy()
         extra_keys = [
             "obj_verts",
@@ -228,7 +200,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         ]
         return base_keys + extra_keys
 
-    def _get_default_error_values(self) -> Dict[str, Any]:
+    def _build_error_defaults(self) -> Dict[str, Any]:
         return {
             "scene_pc": torch.zeros((self.max_points, 3), dtype=torch.float32),
             "hand_model_pose": torch.zeros((self.num_grasps, 23), dtype=torch.float32),
@@ -247,18 +219,14 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
             "total_chunks": 1,
         }
 
-    def _create_data_group(
-        self, hf: h5py.File, idx: int, data: Dict[str, Any], keys_to_cache: List[str]
-    ) -> None:
+    def _create_data_group(self, hf: h5py.File, idx: int, data: Dict[str, Any]) -> None:
         group = hf.create_group(str(idx))
         group.create_dataset("is_error", data=False)
-        for key in keys_to_cache:
+        for key in self.cache_keys:
             if key in data:
                 self._save_value(group, key, data[key])
             else:
-                logging.debug(
-                    "ObjectCentricGraspDatasetCached: key '%s' 不存在，使用默认值。", key
-                )
+                logging.debug("ObjectCentricGraspDatasetCached: missing key '%s'; fallback to default.", key)
 
     def _create_error_group(
         self,
@@ -270,7 +238,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         group = hf.create_group(str(idx))
         group.create_dataset("is_error", data=True)
         group.create_dataset("error_msg", data=error_msg.encode("utf-8"))
-        values = error_values or self._get_default_error_values()
+        values = error_values or self.error_defaults
         for key, value in values.items():
             self._save_value(group, key, value)
 
@@ -292,22 +260,15 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
             else:
                 group.create_dataset(key, data=value)
         except Exception as exc:
-            logging.error(
-                "ObjectCentricGraspDatasetCached: 保存键 '%s' 失败：%s", key, exc
-            )
+            logging.error("ObjectCentricGraspDatasetCached: failed to persist key '%s': %s", key, exc)
 
-    # --------------------------------------------------------------------- #
-    # 读取接口
-    # --------------------------------------------------------------------- #
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        if idx >= self.num_items or idx < 0:
-            raise IndexError(
-                f"Index {idx} out of bounds for dataset length {self.num_items}"
-            )
+        if not 0 <= idx < self.num_items:
+            raise IndexError(f"Index {idx} out of bounds for dataset length {self.num_items}")
 
         if not self._is_cache_ready():
             logging.warning(
-                "ObjectCentricGraspDatasetCached: 缓存不可用，回退至实时计算 (rank=%s)。",
+                "ObjectCentricGraspDatasetCached: cache unavailable, falling back to on-the-fly sampling (rank=%s).",
                 get_rank_info(),
             )
             return ObjectCentricGraspDataset.__getitem__(self, idx)
@@ -319,9 +280,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
                 return self._format_error_item(data)
             return data
         except Exception as exc:
-            logging.error(
-                "ObjectCentricGraspDatasetCached: 读取缓存条目 %d 失败：%s", idx, exc
-            )
+            logging.error("ObjectCentricGraspDatasetCached: failed to load cache item %d: %s", idx, exc)
             return ObjectCentricGraspDataset.__getitem__(self, idx)
 
     def _is_cache_ready(self) -> bool:
@@ -342,7 +301,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
 
         return {
             key: self._load_dataset(group, key)
-            for key in self._get_cache_keys()
+            for key in self.cache_keys
             if key in group
         }
 
@@ -365,11 +324,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         return dataset[()]
 
     def _format_error_item(self, cached_item: Dict[str, Any]) -> Dict[str, Any]:
-        defaults = self._get_default_error_values()
-        formatted = {
-            key: cached_item.get(key, defaults.get(key))
-            for key in self._get_cache_keys()
-        }
+        formatted = {key: cached_item.get(key, self.error_defaults.get(key)) for key in self.cache_keys}
         formatted["error"] = cached_item.get("error", "Unknown error")
         return formatted
 

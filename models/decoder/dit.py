@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
 from einops import rearrange
 from contextlib import nullcontext
 
@@ -503,21 +503,18 @@ class DiTModel(nn.Module):
         Returns:
             The predicted noise or denoised target.
         """
-        # Monitor memory usage during forward pass (can be disabled via cfg.memory_monitoring)
         context_mgr = (
             self.memory_monitor.monitor_peak_memory("DiT_forward_pass")
             if self.memory_monitoring else nullcontext()
         )
         with context_mgr:
             try:
-                # Check memory pressure and log warnings if needed (optional)
                 if self.memory_monitoring:
                     memory_status = self.memory_monitor.check_memory_pressure()
                     if memory_status['under_pressure']:
                         for hint in memory_status['optimization_hints']:
                             self.logger.warning(f"Memory optimization hint: {hint}")
 
-                # Comprehensive input validation with automatic corrections
                 model_device = self._get_device()
                 x_t, ts, data = validate_dit_inputs(
                     x_t=x_t,
@@ -530,364 +527,293 @@ class DiTModel(nn.Module):
                     allow_auto_correction=True,
                     logger=self.logger
                 )
-                
             except DiTValidationError as e:
                 self.logger.error(f"Input validation failed: {e}")
                 raise DiTInputError(f"Invalid inputs to DiT model: {e}")
-        
-        # Handle input dimensions
-        original_shape = x_t.shape
-        if x_t.dim() == 2:
-            # Single grasp format - add sequence dimension for processing
-            x_t = x_t.unsqueeze(1)  # (B, 1, d_x)
-            single_grasp_mode = True
-        elif x_t.dim() == 3:
-            # Multi-grasp format
-            single_grasp_mode = False
-        else:
-            # This should not happen after validation, but keep as safety check
-            raise DiTDimensionError(f"Unsupported input dimension: {x_t.dim()}. Expected 2 or 3.")
-        
-        B, num_grasps, input_d_x = x_t.shape
-        
-        try:
-            # 1. Tokenize grasp poses
-            grasp_tokens = self.grasp_tokenizer(x_t)  # (B, num_grasps, d_model)
-            if torch.isnan(grasp_tokens).any():
-                self.logger.error(f"[NaN Detection] NaN detected in grasp_tokens after tokenization")
-                self.logger.error(f"  Input x_t stats: min={x_t.min():.6f}, max={x_t.max():.6f}, mean={x_t.mean():.6f}, std={x_t.std():.6f}")
-                self.logger.error(f"  grasp_tokens shape: {grasp_tokens.shape}")
-                self.logger.error(f"  NaN count: {torch.isnan(grasp_tokens).sum().item()}/{grasp_tokens.numel()}")
-                raise DiTConditioningError("NaN detected in grasp tokenization")
-            
-            # 2. Add positional embeddings
-            if self.pos_embedding is not None:
-                grasp_tokens = self.pos_embedding(grasp_tokens)
-                if torch.isnan(grasp_tokens).any():
-                    self.logger.error(f"[NaN Detection] NaN detected in grasp_tokens after positional embedding")
-                    self.logger.error(f"  grasp_tokens shape: {grasp_tokens.shape}")
-                    self.logger.error(f"  NaN count: {torch.isnan(grasp_tokens).sum().item()}/{grasp_tokens.numel()}")
-                    raise DiTConditioningError("NaN detected in positional embedding")
-            
-            # 3. Get timestep embeddings
-            time_emb = self.time_embedding(ts)  # (B, time_embed_dim)
-            if torch.isnan(time_emb).any():
-                self.logger.error(f"[NaN Detection] NaN detected in time_emb")
-                self.logger.error(f"  timesteps ts: {ts}")
-                self.logger.error(f"  time_emb shape: {time_emb.shape}")
-                self.logger.error(f"  NaN count: {torch.isnan(time_emb).sum().item()}/{time_emb.numel()}")
-                raise DiTConditioningError("NaN detected in timestep embedding")
-            
-            # 4. Get conditioning features with error handling
-            scene_context = data.get("scene_cond")  # (B, N_points, d_model)
-            text_context = data.get("text_cond")    # (B, d_model) or None
-            
-            # Validate conditioning features
-            if scene_context is not None:
-                if not isinstance(scene_context, torch.Tensor):
-                    raise DiTConditioningError(f"scene_cond must be torch.Tensor, got {type(scene_context)}")
-                if scene_context.device != model_device:
-                    scene_context = scene_context.to(model_device)
-                    self.logger.debug(f"Moved scene_cond to device {model_device}")
-                
-                # Check for NaN in scene context
-                if torch.isnan(scene_context).any():
-                    self.logger.error(f"[NaN Detection] NaN detected in scene_context")
-                    self.logger.error(f"  scene_context shape: {scene_context.shape}")
-                    self.logger.error(f"  scene_context stats: min={scene_context[~torch.isnan(scene_context)].min():.6f} if torch.isnan(scene_context).sum() < scene_context.numel() else 'all NaN'")
-                    self.logger.error(f"  NaN count: {torch.isnan(scene_context).sum().item()}/{scene_context.numel()}")
-                    raise DiTConditioningError("NaN detected in scene conditioning features")
-            
-            # Prepare text context for cross-attention
-            if text_context is not None and self.use_text_condition:
-                if not isinstance(text_context, torch.Tensor):
-                    self.logger.warning(f"text_cond is not a tensor ({type(text_context)}), disabling text conditioning")
-                    text_context = None
-                else:
-                    if text_context.device != model_device:
-                        text_context = text_context.to(model_device)
-                        self.logger.debug(f"Moved text_cond to device {model_device}")
-                    text_context = text_context.unsqueeze(1)  # (B, 1, d_model)
-            else:
-                text_context = None
-            
-            # 5. Process through DiT blocks
-            x = grasp_tokens
-            for i, block in enumerate(self.dit_blocks):
-                try:
-                    logging.debug(f"[DiT Block {i}/{self.num_layers}] Processing...")
-                    logging.debug(f"  Input stats: shape={x.shape}, min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}, std={x.std():.6f}")
 
-                    x = block(
-                        x=x,
-                        time_emb=time_emb if self.use_adaptive_norm else None,
-                        scene_context=scene_context,
-                        text_context=text_context
-                    )
+        x_t, single_grasp_mode = self._normalize_input_shape(x_t)
+        grasp_tokens = self._tokenize_grasps(x_t)
+        time_emb = self._embed_timesteps(ts)
+        scene_context, text_context = self._resolve_condition_features(data, model_device)
 
-                    # Check for NaN after each block
-                    if torch.isnan(x).any():
-                        logging.error(f"[NaN Detection] NaN detected after DiT block {i}")
-                        logging.error(f"  x shape: {x.shape}")
-                        logging.error(f"  NaN count: {torch.isnan(x).sum().item()}/{x.numel()}")
-                        logging.error(f"  Block index: {i}/{self.num_layers}")
-                        raise DiTConditioningError(f"NaN detected in DiT block {i}")
+        x = self._run_dit_blocks(
+            grasp_tokens,
+            time_emb if self.use_adaptive_norm else None,
+            scene_context,
+            text_context
+        )
 
-                    logging.debug(f"[DiT Block {i}/{self.num_layers}] Output stats: min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}, std={x.std():.6f}")
+        output = self._finalize_output(x, single_grasp_mode)
+        self._assert_finite(output, "DiT output")
+        return output
 
-                except DiTConditioningError:
-                    raise
-                except Exception as e:
-                    logging.error(f"[DiT Block {i}] Error in block processing: {e}")
-                    raise DiTConditioningError(f"Error in DiT block {i}: {e}")
-            
-            # 6. Output projection
-            output = self.output_projection(x)  # (B, num_grasps, d_x)
-            
-            # 7. Handle output format to match input
-            if single_grasp_mode:
-                output = output.squeeze(1)  # (B, d_x)
-            
-            # Final validation of output
-            if torch.isnan(output).any():
-                self.logger.error("DiT model output contains NaN values")
-                raise DiTConditioningError("Model output contains NaN values")
-            
-            if torch.isinf(output).any():
-                self.logger.error("DiT model output contains infinite values")
-                raise DiTConditioningError("Model output contains infinite values")
-            
-            return output
-            
-        except DiTConditioningError:
-            raise
-        except Exception as e:
-            self.logger.error(f"Unexpected error in DiT forward pass: {e}")
-            raise DiTConditioningError(f"DiT forward pass failed: {e}")
-    
     def condition(self, data: Dict) -> Dict:
         """
         Pre-computes and processes all conditional features (scene, text).
         Reuses UNet's conditioning logic for compatibility with enhanced error handling.
-
-        Args:
-            data: The raw data from the dataloader.
-
-        Returns:
-            A dictionary with processed "scene_cond" and "text_cond".
         """
+        if data is None:
+            raise DiTConditioningError("Conditioning data is None")
+        if not isinstance(data, dict):
+            raise DiTConditioningError(f"Conditioning data must be dict, got {type(data)}")
+
         try:
-            # Input validation
-            if data is None:
-                raise DiTConditioningError("Conditioning data is None")
-            
-            if not isinstance(data, dict):
-                raise DiTConditioningError(f"Conditioning data must be dict, got {type(data)}")
-            
-            # 1. Scene Feature Extraction with error handling
-            try:
-                if 'scene_pc' not in data or data['scene_pc'] is None:
-                    raise DiTConditioningError("Missing scene_pc in conditioning data")
+            scene_feat = self._prepare_scene_features(data)
+        except Exception as exc:
+            self.logger.error(f"Scene feature extraction failed: {exc}")
+            scene_feat = self._build_fallback_scene_features(data)
 
-                scene_pc = data['scene_pc']
-                if not isinstance(scene_pc, torch.Tensor):
-                    raise DiTConditioningError(f"scene_pc must be torch.Tensor, got {type(scene_pc)}")
+        condition_dict = {"scene_cond": scene_feat, "text_cond": None, "text_mask": None}
+        if self.use_negative_prompts:
+            condition_dict.update({"neg_pred": None, "neg_text_features": None})
 
-                # Ensure proper device placement
-                model_device = self._get_device()
-                scene_pc = scene_pc.to(model_device, dtype=torch.float32)  # (B, N, 6) - xyz + rgb
+        if not (self.use_text_condition and 'positive_prompt' in data):
+            return condition_dict
 
-                logging.debug(f"[Conditioning] scene_pc input: shape={scene_pc.shape}, min={scene_pc.min():.6f}, max={scene_pc.max():.6f}")
+        try:
+            text_features = self._prepare_text_features(data, scene_feat)
+            condition_dict.update(text_features)
+        except Exception as exc:
+            self.logger.warning(f"Text encoding failed: {exc}. Falling back to scene-only conditioning.")
+            condition_dict.update({
+                "text_cond": None,
+                "text_mask": None,
+                "neg_pred": None,
+                "neg_text_features": None
+            })
 
-                # Handle RGB inclusion
-                if not self.use_rgb:
-                    scene_pc = scene_pc[..., :3]  # Keep only xyz
-                    logging.debug(f"[Conditioning] Removed RGB, scene_pc shape: {scene_pc.shape}")
+        return condition_dict
 
-                # Handle object mask inclusion in scene point cloud
-                if self.use_object_mask and 'object_mask' in data and data['object_mask'] is not None:
-                    object_mask = data['object_mask'].to(model_device, dtype=torch.float32)
-                    if object_mask.dim() == 2:
-                        object_mask = object_mask.unsqueeze(-1)
-                    pos = torch.cat([scene_pc, object_mask], dim=-1)
-                    logging.debug(f"[Conditioning] Added object_mask, pos shape: {pos.shape}")
+    def _normalize_input_shape(self, x_t: torch.Tensor) -> Tuple[torch.Tensor, bool]:
+        if x_t.dim() == 2:
+            return x_t.unsqueeze(1), True
+        if x_t.dim() == 3:
+            return x_t, False
+        raise DiTDimensionError(f"Unsupported input dimension: {x_t.dim()}. Expected 2 or 3.")
+
+    def _tokenize_grasps(self, x_t: torch.Tensor) -> torch.Tensor:
+        grasp_tokens = self.grasp_tokenizer(x_t)
+        self._assert_finite(grasp_tokens, "grasp_tokens")
+        if self.pos_embedding is not None:
+            grasp_tokens = self.pos_embedding(grasp_tokens)
+            self._assert_finite(grasp_tokens, "grasp_tokens (positional)")
+        return grasp_tokens
+
+    def _embed_timesteps(self, ts: torch.Tensor) -> torch.Tensor:
+        time_emb = self.time_embedding(ts)
+        self._assert_finite(time_emb, "time_embedding")
+        return time_emb
+
+    def _resolve_condition_features(
+        self,
+        data: Dict,
+        model_device: torch.device
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        scene_context = data.get("scene_cond")
+        if scene_context is not None:
+            if not isinstance(scene_context, torch.Tensor):
+                raise DiTConditioningError(f"scene_cond must be torch.Tensor, got {type(scene_context)}")
+            if scene_context.device != model_device:
+                scene_context = scene_context.to(model_device)
+                self.logger.debug(f"Moved scene_cond to device {model_device}")
+            self._assert_finite(scene_context, "scene_context")
+
+        text_context = None
+        if self.use_text_condition:
+            raw_text_context = data.get("text_cond")
+            if raw_text_context is not None:
+                if not isinstance(raw_text_context, torch.Tensor):
+                    self.logger.warning(
+                        f"text_cond is not a tensor ({type(raw_text_context)}), disabling text conditioning"
+                    )
                 else:
-                    pos = scene_pc
+                    if raw_text_context.device != model_device:
+                        raw_text_context = raw_text_context.to(model_device)
+                        self.logger.debug(f"Moved text_cond to device {model_device}")
+                    self._assert_finite(raw_text_context, "text_context")
+                    text_context = raw_text_context.unsqueeze(1)
+        return scene_context, text_context
 
-                # Validate scene point cloud dimensions
-                if pos.dim() != 3:
-                    raise DiTConditioningError(f"Scene point cloud must be 3D tensor, got {pos.dim()}D")
-
-                logging.debug(f"[Conditioning] Final pos before backbone: shape={pos.shape}, min={pos.min():.6f}, max={pos.max():.6f}, mean={pos.mean():.6f}")
-
-                # Extract scene features
-                _, scene_feat = self.scene_model(pos)
-
-                # Check for NaN immediately after backbone
-                if torch.isnan(scene_feat).any():
-                    logging.error(f"[NaN Detection] NaN in scene_feat immediately after backbone")
-                    logging.error(f"  scene_feat shape: {scene_feat.shape}")
-                    logging.error(f"  NaN count: {torch.isnan(scene_feat).sum().item()}/{scene_feat.numel()}")
-                    logging.error(f"  pos stats: min={pos.min():.6f}, max={pos.max():.6f}")
-                    raise DiTConditioningError("NaN detected in backbone output")
-
-                logging.debug(f"[Conditioning] scene_feat after backbone: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}")
-
-                scene_feat = scene_feat.permute(0, 2, 1).contiguous()  # (B, N, C)
-
-                # Validate scene features
-                if torch.isnan(scene_feat).any():
-                    self.logger.warning("Scene features contain NaN values, replacing with zeros")
-                    scene_feat = torch.where(torch.isnan(scene_feat), torch.zeros_like(scene_feat), scene_feat)
-
-                if torch.isinf(scene_feat).any():
-                    self.logger.warning("Scene features contain infinite values, clamping")
-                    scene_feat = torch.clamp(scene_feat, -1e6, 1e6)
-
-                logging.debug(f"[Conditioning] scene_feat after permute: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}")
-
-                # Project scene features to model dimension
-                scene_feat = self.scene_projection(scene_feat)  # (B, N, d_model)
-
-                # Check for NaN after projection
-                if torch.isnan(scene_feat).any():
-                    logging.error(f"[NaN Detection] NaN in scene_feat after projection")
-                    logging.error(f"  scene_feat shape: {scene_feat.shape}")
-                    logging.error(f"  NaN count: {torch.isnan(scene_feat).sum().item()}/{scene_feat.numel()}")
-                    raise DiTConditioningError("NaN detected in scene projection")
-
-                logging.debug(f"[Conditioning] scene_feat after projection: shape={scene_feat.shape}, min={scene_feat.min():.6f}, max={scene_feat.max():.6f}, mean={scene_feat.mean():.6f}")
-                
-            except Exception as e:
-                self.logger.error(f"Scene feature extraction failed: {e}")
-                # Create fallback scene features
-                batch_size = 1
-                if 'scene_pc' in data and data['scene_pc'] is not None:
-                    batch_size = data['scene_pc'].shape[0]
-                
-                model_device = self._get_device()
-                # Create fallback scene features with backbone output dimension, then project
-                scene_feat_raw = torch.zeros(batch_size, 1024, 512, device=model_device)  # Backbone output dim
-                scene_feat = self.scene_projection(scene_feat_raw)  # Project to d_model
-                self.logger.warning("Using fallback scene features due to extraction failure")
-
-            condition_dict = {"scene_cond": scene_feat, "text_cond": None, "text_mask": None}
-            if self.use_negative_prompts:
-                condition_dict.update({"neg_pred": None, "neg_text_features": None})
-
-            # 2. Text Feature Extraction (if enabled) with comprehensive error handling
-            if not (self.use_text_condition and 'positive_prompt' in data):
-                return condition_dict
-
+    def _run_dit_blocks(
+        self,
+        tokens: torch.Tensor,
+        time_emb: Optional[torch.Tensor],
+        scene_context: Optional[torch.Tensor],
+        text_context: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        x = tokens
+        for idx, block in enumerate(self.dit_blocks):
             try:
-                self._ensure_text_encoder()
-                b = scene_feat.shape[0]
+                self.logger.debug(
+                    f"[DiT Block {idx}/{self.num_layers}] "
+                    f"Input stats: shape={tuple(x.shape)}, min={x.min():.6f}, max={x.max():.6f}, "
+                    f"mean={x.mean():.6f}, std={x.std():.6f}"
+                )
+                x = block(
+                    x=x,
+                    time_emb=time_emb,
+                    scene_context=scene_context,
+                    text_context=text_context
+                )
+                self._assert_finite(x, f"DiT block {idx} output")
+            except DiTConditioningError:
+                raise
+            except Exception as exc:
+                self.logger.error(f"[DiT Block {idx}] Error in block processing: {exc}")
+                raise DiTConditioningError(f"Error in DiT block {idx}: {exc}") from exc
+        return x
 
-                # Validate text prompts
-                if not isinstance(data['positive_prompt'], (list, tuple)):
-                    raise DiTConditioningError(f"positive_prompt must be list or tuple, got {type(data['positive_prompt'])}")
+    def _finalize_output(self, x: torch.Tensor, single_grasp_mode: bool) -> torch.Tensor:
+        output = self.output_projection(x)
+        if single_grasp_mode:
+            output = output.squeeze(1)
+        return output
 
-                if len(data['positive_prompt']) != b:
-                    raise DiTConditioningError(f"Batch size mismatch: scene features {b}, prompts {len(data['positive_prompt'])}")
+    def _prepare_scene_features(self, data: Dict) -> torch.Tensor:
+        if 'scene_pc' not in data or data['scene_pc'] is None:
+            raise DiTConditioningError("Missing scene_pc in conditioning data")
 
-                logging.debug(f"[Text Conditioning] Encoding {b} positive prompts...")
+        scene_pc = data['scene_pc']
+        if not isinstance(scene_pc, torch.Tensor):
+            raise DiTConditioningError(f"scene_pc must be torch.Tensor, got {type(scene_pc)}")
 
-                # Encode positive and negative prompts
-                pos_text_features = self.text_encoder.encode_positive(data['positive_prompt'])
+        model_device = self._get_device()
+        scene_pc = scene_pc.to(model_device, dtype=torch.float32)
+        self.logger.debug(
+            f"[Conditioning] scene_pc input: shape={tuple(scene_pc.shape)}, "
+            f"min={scene_pc.min():.6f}, max={scene_pc.max():.6f}"
+        )
 
-                # Check for NaN after positive encoding
-                if torch.isnan(pos_text_features).any():
-                    logging.error(f"[NaN Detection] NaN in pos_text_features after encoding")
-                    logging.error(f"  pos_text_features shape: {pos_text_features.shape}")
-                    logging.error(f"  NaN count: {torch.isnan(pos_text_features).sum().item()}/{pos_text_features.numel()}")
-                    logging.error(f"  Prompts: {data['positive_prompt']}")
-                    raise DiTConditioningError("NaN detected in positive text encoding")
+        if not self.use_rgb:
+            scene_pc = scene_pc[..., :3]
+            self.logger.debug(f"[Conditioning] Removed RGB, scene_pc shape: {tuple(scene_pc.shape)}")
 
-                logging.debug(f"[Text Conditioning] pos_text_features: shape={pos_text_features.shape}, min={pos_text_features.min():.6f}, max={pos_text_features.max():.6f}, mean={pos_text_features.mean():.6f}")
+        if self.use_object_mask and 'object_mask' in data and data['object_mask'] is not None:
+            object_mask = data['object_mask'].to(model_device, dtype=torch.float32)
+            if object_mask.dim() == 2:
+                object_mask = object_mask.unsqueeze(-1)
+            scene_points = torch.cat([scene_pc, object_mask], dim=-1)
+            self.logger.debug(f"[Conditioning] Added object_mask, pos shape: {tuple(scene_points.shape)}")
+        else:
+            scene_points = scene_pc
 
+        if scene_points.dim() != 3:
+            raise DiTConditioningError(f"Scene point cloud must be 3D tensor, got {scene_points.dim()}D")
+
+        self.logger.debug(
+            f"[Conditioning] Final pos before backbone: shape={tuple(scene_points.shape)}, "
+            f"min={scene_points.min():.6f}, max={scene_points.max():.6f}, mean={scene_points.mean():.6f}"
+        )
+
+        _, scene_feat = self.scene_model(scene_points)
+        self._assert_finite(scene_feat, "scene_feat (backbone output)")
+        scene_feat = scene_feat.permute(0, 2, 1).contiguous()
+        scene_feat = self._replace_non_finite(scene_feat, "scene_feat (permuted)")
+        scene_feat = self.scene_projection(scene_feat)
+        self._assert_finite(scene_feat, "scene_feat (projected)")
+        return scene_feat
+
+    def _build_fallback_scene_features(self, data: Dict) -> torch.Tensor:
+        batch_size = 1
+        if 'scene_pc' in data and isinstance(data['scene_pc'], torch.Tensor):
+            batch_size = data['scene_pc'].shape[0]
+        model_device = self._get_device()
+        scene_feat_raw = torch.zeros(batch_size, 1024, 512, device=model_device)
+        self.logger.warning("Using fallback scene features due to extraction failure")
+        return self.scene_projection(scene_feat_raw)
+
+    def _prepare_text_features(self, data: Dict, scene_feat: torch.Tensor) -> Dict[str, Optional[torch.Tensor]]:
+        self._ensure_text_encoder()
+        batch_size = scene_feat.shape[0]
+
+        positive_prompts = data['positive_prompt']
+        if not isinstance(positive_prompts, (list, tuple)):
+            raise DiTConditioningError(f"positive_prompt must be list or tuple, got {type(positive_prompts)}")
+        if len(positive_prompts) != batch_size:
+            raise DiTConditioningError(
+                f"Batch size mismatch: scene features {batch_size}, prompts {len(positive_prompts)}"
+            )
+
+        self.logger.debug(f"[Text Conditioning] Encoding {batch_size} positive prompts...")
+        pos_text_features = self.text_encoder.encode_positive(positive_prompts)
+        self._assert_finite(pos_text_features, "pos_text_features")
+
+        neg_text_features: Optional[torch.Tensor] = None
+        if self.use_negative_prompts and data.get('negative_prompts') is not None:
+            try:
+                neg_text_features = self.text_encoder.encode_negative(data['negative_prompts'])
+                if self._has_non_finite(neg_text_features):
+                    self.logger.warning(
+                        "[Text Conditioning] Negative text features contain non-finite values, disabling negatives"
+                    )
+                    neg_text_features = None
+            except Exception as exc:
+                self.logger.warning(f"Negative prompt encoding failed: {exc}. Continuing without negative prompts.")
                 neg_text_features = None
 
-                if self.use_negative_prompts and 'negative_prompts' in data and data['negative_prompts'] is not None:
-                    try:
-                        logging.debug(f"[Text Conditioning] Encoding negative prompts...")
-                        neg_text_features = self.text_encoder.encode_negative(data['negative_prompts'])
+        model_device = self._get_device()
+        text_mask = (
+            torch.bernoulli(
+                torch.full((batch_size, 1), 1.0 - self.text_dropout_prob, device=model_device)
+            )
+            if self.training else torch.ones(batch_size, 1, device=model_device)
+        )
+        self.logger.debug(
+            f"[Text Conditioning] text_mask sum: {text_mask.sum().item()}/{batch_size} "
+            f"(dropout_prob={self.text_dropout_prob})"
+        )
 
-                        if torch.isnan(neg_text_features).any():
-                            logging.warning(f"[NaN Detection] NaN in neg_text_features, disabling negative prompts")
-                            neg_text_features = None
-                        else:
-                            logging.debug(f"[Text Conditioning] neg_text_features: shape={neg_text_features.shape}, min={neg_text_features.min():.6f}, max={neg_text_features.max():.6f}")
-                    except Exception as e:
-                        self.logger.warning(f"Negative prompt encoding failed: {e}. Continuing without negative prompts.")
-                        neg_text_features = None
+        scene_embedding = torch.mean(scene_feat, dim=1)
+        self._assert_finite(scene_embedding, "scene_embedding")
 
-                # Validate text features
-                if torch.isnan(pos_text_features).any():
-                    self.logger.warning("Positive text features contain NaN values, replacing with zeros")
-                    pos_text_features = torch.where(torch.isnan(pos_text_features), torch.zeros_like(pos_text_features), pos_text_features)
+        pos_text_features_out, neg_pred = self.text_processor(
+            pos_text_features, neg_text_features, scene_embedding
+        )
+        self._assert_finite(pos_text_features_out, "processed_text_features")
 
-                # Apply text dropout during training
-                model_device = self._get_device()
-                text_mask = torch.bernoulli(torch.full((b, 1), 1.0 - self.text_dropout_prob, device=model_device)) if self.training else torch.ones(b, 1, device=model_device)
+        payload = {
+            "text_cond": pos_text_features_out * text_mask,
+            "text_mask": text_mask
+        }
+        if self.use_negative_prompts:
+            payload.update({
+                "neg_pred": neg_pred,
+                "neg_text_features": neg_text_features
+            })
+        return payload
 
-                logging.debug(f"[Text Conditioning] text_mask sum: {text_mask.sum().item()}/{b} (dropout_prob={self.text_dropout_prob})")
+    def _replace_non_finite(self, tensor: torch.Tensor, name: str) -> torch.Tensor:
+        if torch.isnan(tensor).any():
+            self.logger.warning(f"{name} contains NaN values, replacing with zeros")
+            tensor = torch.where(torch.isnan(tensor), torch.zeros_like(tensor), tensor)
+        if torch.isinf(tensor).any():
+            self.logger.warning(f"{name} contains infinite values, clamping to [-1e6, 1e6]")
+            tensor = torch.clamp(tensor, -1e6, 1e6)
+        return tensor
 
-                # Process text features
-                scene_embedding = torch.mean(scene_feat, dim=1)
+    def _assert_finite(self, tensor: Optional[torch.Tensor], name: str) -> None:
+        if tensor is None or tensor.numel() == 0:
+            return
+        if torch.isnan(tensor).any():
+            self._log_tensor_stats(tensor, name)
+            raise DiTConditioningError(f"NaN detected in {name}")
+        if torch.isinf(tensor).any():
+            self._log_tensor_stats(tensor, name)
+            raise DiTConditioningError(f"Infinite value detected in {name}")
 
-                # Check scene_embedding for NaN
-                if torch.isnan(scene_embedding).any():
-                    logging.error(f"[NaN Detection] NaN in scene_embedding")
-                    logging.error(f"  scene_embedding shape: {scene_embedding.shape}")
-                    logging.error(f"  NaN count: {torch.isnan(scene_embedding).sum().item()}/{scene_embedding.numel()}")
-                    raise DiTConditioningError("NaN detected in scene embedding")
+    def _has_non_finite(self, tensor: torch.Tensor) -> bool:
+        return torch.isnan(tensor).any() or torch.isinf(tensor).any()
 
-                logging.debug(f"[Text Conditioning] scene_embedding: shape={scene_embedding.shape}, min={scene_embedding.min():.6f}, max={scene_embedding.max():.6f}")
-
-                pos_text_features_out, neg_pred = self.text_processor(pos_text_features, neg_text_features, scene_embedding)
-
-                # Check for NaN after text processor
-                if torch.isnan(pos_text_features_out).any():
-                    logging.error(f"[NaN Detection] NaN in pos_text_features_out after text_processor")
-                    logging.error(f"  pos_text_features_out shape: {pos_text_features_out.shape}")
-                    logging.error(f"  NaN count: {torch.isnan(pos_text_features_out).sum().item()}/{pos_text_features_out.numel()}")
-                    raise DiTConditioningError("NaN detected in text processor output")
-
-                logging.debug(f"[Text Conditioning] pos_text_features_out: shape={pos_text_features_out.shape}, min={pos_text_features_out.min():.6f}, max={pos_text_features_out.max():.6f}")
-
-                # Validate processed text features
-                if torch.isnan(pos_text_features_out).any():
-                    self.logger.warning("Processed text features contain NaN values, disabling text conditioning")
-                    raise DiTConditioningError("Processed text features contain NaN values")
-
-                condition_dict.update({"text_cond": pos_text_features_out * text_mask, "text_mask": text_mask})
-                if self.use_negative_prompts and neg_pred is not None:
-                    condition_dict.update({
-                        "neg_pred": neg_pred,  # Predicted negative prompt for CFG
-                        "neg_text_features": neg_text_features, # Original negative features for loss
-                    })
-
-                logging.debug(f"[Text Conditioning] Final text_cond: shape={(pos_text_features_out * text_mask).shape}, active_count={text_mask.sum().item()}")
-
-            except Exception as e:
-                self.logger.warning(f"Text encoding failed: {e}. Falling back to scene-only conditioning.")
-                # Clear all text-related conditioning
-                condition_dict.update({
-                    "text_cond": None,
-                    "text_mask": None,
-                    "neg_pred": None,
-                    "neg_text_features": None
-                })
-
-            return condition_dict
-            
-        except DiTConditioningError:
-            raise
-        except Exception as e:
-            self.logger.error(f"Conditioning failed with unexpected error: {e}")
-            # Use fallback conditioning
-            fallback_data = self.fallback.handle_conditioning_failure(data, e)
-            return fallback_data
+    def _log_tensor_stats(self, tensor: torch.Tensor, name: str) -> None:
+        finite_tensor = tensor[torch.isfinite(tensor)]
+        if finite_tensor.numel() == 0:
+            self.logger.error(f"[{name}] tensor is entirely non-finite")
+            return
+        self.logger.error(
+            f"[{name}] stats: shape={tuple(tensor.shape)}, "
+            f"min={finite_tensor.min():.6f}, max={finite_tensor.max():.6f}, "
+            f"mean={finite_tensor.mean():.6f}"
+        )
     
     # --- Device Management for Lazy-Loaded Encoder ---
 

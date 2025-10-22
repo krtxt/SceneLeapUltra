@@ -308,12 +308,20 @@ class BatchProcessor:
     Scalable batch processing for different grasp counts with memory optimization.
     """
     
-    def __init__(self, max_batch_size: int = 32, max_sequence_length: int = 100,
-                 logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        max_batch_size: int = 32,
+        max_sequence_length: int = 100,
+        logger: Optional[logging.Logger] = None,
+        default_d_model: int = 512,
+        default_num_layers: int = 12,
+    ):
         self.max_batch_size = max_batch_size
         self.max_sequence_length = max_sequence_length
         self.logger = logger or logging.getLogger(__name__)
         self.memory_monitor = MemoryMonitor(logger)
+        self.default_d_model = default_d_model
+        self.default_num_layers = default_num_layers
     
     def estimate_memory_usage(self, batch_size: int, sequence_length: int, 
                             d_model: int, num_layers: int) -> float:
@@ -382,91 +390,117 @@ class BatchProcessor:
         
         return suggestions
     
-    def process_variable_length_batch(self, model_forward_fn, inputs: list, 
-                                    max_memory_gb: float = 8.0) -> list:
+    def process_variable_length_batch(
+        self,
+        model_forward_fn,
+        inputs: list,
+        max_memory_gb: float = 8.0
+    ) -> list:
         """
         Process a batch with variable sequence lengths efficiently.
-        
-        Args:
-            model_forward_fn: Function to call for model forward pass
-            inputs: List of input tensors with potentially different sequence lengths
-            max_memory_gb: Maximum memory to use
-            
-        Returns:
-            List of outputs corresponding to inputs
         """
-        # Sort inputs by sequence length for efficient batching
-        sorted_inputs = sorted(enumerate(inputs), key=lambda x: x[1].shape[1] if x[1].dim() > 2 else 1)
-        
+        sorted_inputs = self._sort_inputs_by_length(inputs)
         outputs = [None] * len(inputs)
-        current_batch = []
-        current_indices = []
-        
+        current_batch: list = []
+        current_indices: list = []
+
         for original_idx, input_tensor in sorted_inputs:
             current_batch.append(input_tensor)
             current_indices.append(original_idx)
-            
-            # Check if we should process current batch
-            should_process = False
-            
-            if len(current_batch) >= self.max_batch_size:
-                should_process = True
-            elif len(current_batch) > 0:
-                # Estimate memory usage for current batch
-                max_seq_len = max(t.shape[1] if t.dim() > 2 else 1 for t in current_batch)
-                estimated_memory = self.estimate_memory_usage(
-                    len(current_batch), max_seq_len, 512, 12  # Rough estimates
+
+            if self._should_flush_batch(current_batch, max_memory_gb):
+                self._process_and_store_batch(
+                    model_forward_fn,
+                    current_batch,
+                    current_indices,
+                    outputs
                 )
-                if estimated_memory > max_memory_gb:
-                    should_process = True
-            
-            if should_process and len(current_batch) > 0:
-                # Process current batch
-                try:
-                    with self.memory_monitor.monitor_peak_memory(f"batch_size_{len(current_batch)}"):
-                        batch_outputs = model_forward_fn(current_batch)
-                        
-                    # Store outputs in correct positions
-                    for i, output in enumerate(batch_outputs):
-                        outputs[current_indices[i]] = output
-                        
-                except RuntimeError as e:
-                    if "out of memory" in str(e).lower():
-                        self.logger.warning(f"OOM with batch size {len(current_batch)}, processing individually")
-                        # Process individually
-                        for i, single_input in enumerate(current_batch):
-                            try:
-                                single_output = model_forward_fn([single_input])
-                                outputs[current_indices[i]] = single_output[0]
-                            except RuntimeError as e2:
-                                self.logger.error(f"Failed to process single input: {e2}")
-                                raise
-                    else:
-                        raise
-                
-                # Clear batch
-                current_batch = []
-                current_indices = []
-        
-        # Process remaining inputs
+                current_batch, current_indices = [], []
+
         if current_batch:
-            try:
-                with self.memory_monitor.monitor_peak_memory(f"final_batch_size_{len(current_batch)}"):
-                    batch_outputs = model_forward_fn(current_batch)
-                    
-                for i, output in enumerate(batch_outputs):
-                    outputs[current_indices[i]] = output
-                    
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    # Process individually
-                    for i, single_input in enumerate(current_batch):
-                        single_output = model_forward_fn([single_input])
-                        outputs[current_indices[i]] = single_output[0]
-                else:
-                    raise
-        
+            self._process_and_store_batch(
+                model_forward_fn,
+                current_batch,
+                current_indices,
+                outputs
+            )
+
         return outputs
+
+    def _sort_inputs_by_length(self, inputs: list) -> list:
+        return sorted(
+            enumerate(inputs),
+            key=lambda item: self._sequence_length(item[1])
+        )
+
+    def _should_flush_batch(self, current_batch: list, max_memory_gb: float) -> bool:
+        if not current_batch:
+            return False
+        if len(current_batch) >= self.max_batch_size:
+            return True
+        estimated_memory = self._estimate_batch_memory_gb(current_batch)
+        return estimated_memory > max_memory_gb
+
+    def _process_and_store_batch(
+        self,
+        model_forward_fn,
+        batch: list,
+        indices: list,
+        outputs: list,
+    ) -> None:
+        if not batch:
+            return
+        try:
+            batch_outputs = self._run_with_monitor(model_forward_fn, batch)
+            for offset, output in enumerate(batch_outputs):
+                outputs[indices[offset]] = output
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                self.logger.warning(
+                    f"OOM with batch size {len(batch)}, falling back to per-sample processing"
+                )
+                self._handle_oom_batch(model_forward_fn, batch, indices, outputs)
+            else:
+                raise
+
+    def _run_with_monitor(self, model_forward_fn, batch: list) -> list:
+        with self.memory_monitor.monitor_peak_memory(f"batch_size_{len(batch)}"):
+            return model_forward_fn(batch)
+
+    def _handle_oom_batch(
+        self,
+        model_forward_fn,
+        batch: list,
+        indices: list,
+        outputs: list,
+    ) -> None:
+        for offset, single_input in enumerate(batch):
+            try:
+                single_output = self._run_with_monitor(model_forward_fn, [single_input])
+                outputs[indices[offset]] = single_output[0]
+            except RuntimeError as exc:
+                self.logger.error(f"Failed to process single input: {exc}")
+                raise
+
+    def _estimate_batch_memory_gb(self, batch: list) -> float:
+        if not batch:
+            return 0.0
+        max_seq_len = max(self._sequence_length(t) for t in batch)
+        max_seq_len = min(max_seq_len, self.max_sequence_length)
+        return self.estimate_memory_usage(
+            len(batch),
+            max_seq_len,
+            self.default_d_model,
+            self.default_num_layers
+        )
+
+    @staticmethod
+    def _sequence_length(tensor: torch.Tensor) -> int:
+        if tensor.dim() > 2:
+            return tensor.shape[1]
+        if tensor.dim() == 2:
+            return tensor.shape[0]
+        return 1
 
 
 def optimize_memory_usage():

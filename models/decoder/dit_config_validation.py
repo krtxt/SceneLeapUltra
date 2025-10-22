@@ -15,6 +15,29 @@ class DiTConfigValidationError(Exception):
     pass
 
 
+REQUIRED_PARAMS = [
+    'name', 'rot_type', 'd_model', 'num_layers', 'num_heads', 'd_head',
+    'dropout', 'max_sequence_length', 'use_learnable_pos_embedding',
+    'time_embed_dim', 'time_embed_mult', 'use_adaptive_norm',
+    'use_text_condition', 'text_dropout_prob', 'use_negative_prompts',
+    'use_object_mask', 'use_rgb', 'attention_dropout', 'cross_attention_dropout',
+    'ff_mult', 'ff_dropout', 'gradient_checkpointing', 'use_flash_attention'
+]
+
+VALID_ROT_TYPES = {'quat', 'r6d'}
+
+DROPOUT_PARAMS = [
+    'dropout', 'attention_dropout', 'cross_attention_dropout',
+    'ff_dropout', 'text_dropout_prob'
+]
+
+BOOLEAN_PARAMS = [
+    'use_learnable_pos_embedding', 'use_adaptive_norm', 'use_text_condition',
+    'use_negative_prompts', 'use_object_mask', 'use_rgb',
+    'gradient_checkpointing', 'use_flash_attention'
+]
+
+
 def validate_dit_config(cfg: DictConfig) -> bool:
     """
     Validate DiT model configuration parameters.
@@ -29,123 +52,27 @@ def validate_dit_config(cfg: DictConfig) -> bool:
         DiTConfigValidationError: If configuration is invalid
     """
     try:
-        # Required parameters
-        required_params = [
-            'name', 'rot_type', 'd_model', 'num_layers', 'num_heads', 'd_head',
-            'dropout', 'max_sequence_length', 'use_learnable_pos_embedding',
-            'time_embed_dim', 'time_embed_mult', 'use_adaptive_norm',
-            'use_text_condition', 'text_dropout_prob', 'use_negative_prompts',
-            'use_object_mask', 'use_rgb', 'attention_dropout', 'cross_attention_dropout',
-            'ff_mult', 'ff_dropout', 'gradient_checkpointing', 'use_flash_attention'
-        ]
-        
-        # Check required parameters exist
-        missing_params = []
-        for param in required_params:
-            if not hasattr(cfg, param):
-                missing_params.append(param)
-        
-        if missing_params:
-            raise DiTConfigValidationError(
-                f"Missing required DiT configuration parameters: {missing_params}"
-            )
-        
-        # Validate model name
-        if cfg.name.lower() != 'dit':
-            raise DiTConfigValidationError(
-                f"Invalid model name '{cfg.name}'. Expected 'dit'"
-            )
-        
-        # Validate rotation type
-        valid_rot_types = ['quat', 'r6d']
-        if cfg.rot_type not in valid_rot_types:
-            raise DiTConfigValidationError(
-                f"Invalid rot_type '{cfg.rot_type}'. Must be one of {valid_rot_types}"
-            )
-        
-        # Validate architecture parameters
-        if cfg.d_model <= 0 or cfg.d_model % cfg.num_heads != 0:
-            raise DiTConfigValidationError(
-                f"d_model ({cfg.d_model}) must be positive and divisible by num_heads ({cfg.num_heads})"
-            )
-        
-        if cfg.num_layers <= 0:
-            raise DiTConfigValidationError(
-                f"num_layers ({cfg.num_layers}) must be positive"
-            )
-        
-        if cfg.num_heads <= 0:
-            raise DiTConfigValidationError(
-                f"num_heads ({cfg.num_heads}) must be positive"
-            )
-        
-        if cfg.d_head <= 0:
-            raise DiTConfigValidationError(
-                f"d_head ({cfg.d_head}) must be positive"
-            )
-        
-        # Validate dropout parameters
-        dropout_params = [
-            ('dropout', cfg.dropout),
-            ('attention_dropout', cfg.attention_dropout),
-            ('cross_attention_dropout', cfg.cross_attention_dropout),
-            ('ff_dropout', cfg.ff_dropout),
-            ('text_dropout_prob', cfg.text_dropout_prob)
-        ]
-        
-        for param_name, param_value in dropout_params:
-            if not (0.0 <= param_value <= 1.0):
-                raise DiTConfigValidationError(
-                    f"{param_name} ({param_value}) must be between 0.0 and 1.0"
-                )
-        
-        # Validate sequence length
-        if cfg.max_sequence_length <= 0:
-            raise DiTConfigValidationError(
-                f"max_sequence_length ({cfg.max_sequence_length}) must be positive"
-            )
-        
-        # Validate timestep embedding parameters
-        if cfg.time_embed_dim <= 0:
-            raise DiTConfigValidationError(
-                f"time_embed_dim ({cfg.time_embed_dim}) must be positive"
-            )
-        
-        if cfg.time_embed_mult <= 0:
-            raise DiTConfigValidationError(
-                f"time_embed_mult ({cfg.time_embed_mult}) must be positive"
-            )
-        
-        # Validate feed-forward multiplier
-        if cfg.ff_mult <= 0:
-            raise DiTConfigValidationError(
-                f"ff_mult ({cfg.ff_mult}) must be positive"
-            )
-        
-        # Validate boolean parameters
-        boolean_params = [
-            'use_learnable_pos_embedding', 'use_adaptive_norm', 'use_text_condition',
-            'use_negative_prompts', 'use_object_mask', 'use_rgb', 'gradient_checkpointing',
-            'use_flash_attention'
-        ]
-        
-        for param in boolean_params:
-            if not isinstance(getattr(cfg, param), bool):
-                raise DiTConfigValidationError(
-                    f"{param} must be a boolean value"
-                )
-        
-        # Validate backbone configuration if present
+        _require_attributes(cfg, REQUIRED_PARAMS)
+        _ensure_condition(cfg.name.lower() == 'dit', f"Invalid model name '{cfg.name}'. Expected 'dit'")
+        _ensure_in_set(cfg.rot_type, VALID_ROT_TYPES, "rot_type")
+
+        _ensure_positive(cfg, ['d_model', 'num_layers', 'num_heads', 'd_head',
+                               'max_sequence_length', 'time_embed_dim', 'time_embed_mult', 'ff_mult'])
+        _ensure_divisible(cfg.d_model, cfg.num_heads, "d_model", "num_heads")
+
+        _ensure_in_range(cfg, DROPOUT_PARAMS, 0.0, 1.0)
+        _ensure_booleans(cfg, BOOLEAN_PARAMS)
+
         if hasattr(cfg, 'backbone'):
             _validate_backbone_config(cfg.backbone)
-        
+
         logging.info("DiT configuration validation passed")
         return True
-        
+
     except DiTConfigValidationError:
         raise
     except Exception as e:
-        raise DiTConfigValidationError(f"Unexpected error during DiT config validation: {str(e)}")
+        raise DiTConfigValidationError(f"Unexpected error during DiT config validation: {str(e)}") from e
 
 
 def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
@@ -160,116 +87,19 @@ def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
     """
     if not hasattr(backbone_cfg, 'name'):
         raise DiTConfigValidationError("Backbone configuration missing 'name' parameter")
-    
+
     backbone_name = backbone_cfg.name.lower()
+    validators = {
+        'pointnet2': _validate_pointnet2_backbone,
+        'ptv3': _validate_ptv3_backbone,
+    }
 
-    if backbone_name == 'pointnet2':
-        # Validate PointNet2 specific parameters
-        required_layers = ['layer1', 'layer2', 'layer3', 'layer4']
-        for layer_name in required_layers:
-            if not hasattr(backbone_cfg, layer_name):
-                raise DiTConfigValidationError(
-                    f"PointNet2 backbone missing required layer: {layer_name}"
-                )
-            
-            layer_cfg = getattr(backbone_cfg, layer_name)
-            
-            # Check required layer parameters
-            required_layer_params = ['npoint', 'radius_list', 'nsample_list', 'mlp_list']
-            for param in required_layer_params:
-                if not hasattr(layer_cfg, param):
-                    raise DiTConfigValidationError(
-                        f"PointNet2 {layer_name} missing required parameter: {param}"
-                    )
-            
-            # Validate parameter values
-            if layer_cfg.npoint <= 0:
-                raise DiTConfigValidationError(
-                    f"PointNet2 {layer_name} npoint ({layer_cfg.npoint}) must be positive"
-                )
-            
-            # Handle both list and single value formats for radius_list
-            radius_list = layer_cfg.radius_list
-            if not isinstance(radius_list, (list, tuple)):
-                radius_list = [radius_list]
-            if len(radius_list) == 0:
-                raise DiTConfigValidationError(
-                    f"PointNet2 {layer_name} radius_list must be non-empty"
-                )
-            
-            # Handle both list and single value formats for nsample_list
-            nsample_list = layer_cfg.nsample_list
-            if not isinstance(nsample_list, (list, tuple)):
-                nsample_list = [nsample_list]
-            if len(nsample_list) == 0:
-                raise DiTConfigValidationError(
-                    f"PointNet2 {layer_name} nsample_list must be non-empty"
-                )
-            
-            # Handle both list and single value formats for mlp_list
-            mlp_list = layer_cfg.mlp_list
-            if not isinstance(mlp_list, (list, tuple)):
-                mlp_list = [mlp_list]
-            if len(mlp_list) == 0:
-                raise DiTConfigValidationError(
-                    f"PointNet2 {layer_name} mlp_list must be non-empty"
-                )
-
-    elif backbone_name == 'ptv3':
-        # PTv3 is supported. Perform light validation with permissive defaults.
-        # Only validate values if they are explicitly provided; otherwise rely on backbone defaults.
-        if hasattr(backbone_cfg, 'in_channels'):
-            in_ch = getattr(backbone_cfg, 'in_channels')
-            if not isinstance(in_ch, int) or in_ch <= 0:
-                raise DiTConfigValidationError(
-                    f"PTv3 in_channels ({in_ch}) must be a positive integer if provided"
-                )
-        if hasattr(backbone_cfg, 'grid_size'):
-            grid = getattr(backbone_cfg, 'grid_size')
-            if not (isinstance(grid, (int, float)) and grid > 0):
-                raise DiTConfigValidationError(
-                    f"PTv3 grid_size ({grid}) must be a positive number if provided"
-                )
-        if hasattr(backbone_cfg, 'max_context_points'):
-            mcp = getattr(backbone_cfg, 'max_context_points')
-            if not (isinstance(mcp, int) and mcp > 0):
-                raise DiTConfigValidationError(
-                    f"PTv3 max_context_points ({mcp}) must be a positive integer if provided"
-                )
-        # Optional structural lists (when provided) should be non-empty sequences
-        optional_seq_params = [
-            'enc_depths', 'enc_channels', 'enc_num_head', 'enc_patch_size',
-            'dec_depths', 'dec_channels', 'dec_num_head', 'dec_patch_size'
-        ]
-        for pname in optional_seq_params:
-            if hasattr(backbone_cfg, pname):
-                val = getattr(backbone_cfg, pname)
-                # Accept OmegaConf ListConfig in addition to list/tuple
-                if isinstance(val, (list, tuple, ListConfig)):
-                    if len(val) == 0:
-                        raise DiTConfigValidationError(
-                            f"PTv3 {pname} must be non-empty if provided"
-                        )
-                else:
-                    # Try generic length check for other sequence-like types (excluding strings)
-                    if isinstance(val, str):
-                        raise DiTConfigValidationError(
-                            f"PTv3 {pname} must be a non-empty sequence (not str) if provided"
-                        )
-                    try:
-                        if len(val) == 0:
-                            raise DiTConfigValidationError(
-                                f"PTv3 {pname} must be non-empty if provided"
-                            )
-                    except Exception:
-                        raise DiTConfigValidationError(
-                            f"PTv3 {pname} must be a non-empty list/tuple/ListConfig if provided"
-                        )
-
-    else:
+    if backbone_name not in validators:
         raise DiTConfigValidationError(
             f"Unsupported backbone '{backbone_cfg.name}'. Supported backbones: 'pointnet2', 'ptv3'"
         )
+
+    validators[backbone_name](backbone_cfg)
 
 
 def validate_dit_compatibility_with_diffuser(dit_cfg: DictConfig, diffuser_cfg: DictConfig) -> bool:
@@ -357,3 +187,114 @@ def get_dit_config_summary(cfg: DictConfig) -> Dict[str, Any]:
             'use_flash_attention': cfg.use_flash_attention
         }
     }
+
+
+def _require_attributes(cfg: Any, attributes: List[str], prefix: str = "DiT configuration") -> None:
+    missing = [attr for attr in attributes if not hasattr(cfg, attr)]
+    if missing:
+        raise DiTConfigValidationError(f"{prefix} missing required parameters: {missing}")
+
+
+def _ensure_condition(condition: bool, message: str) -> None:
+    if not condition:
+        raise DiTConfigValidationError(message)
+
+
+def _ensure_in_set(value: Any, valid_values: set, field_name: str) -> None:
+    if value not in valid_values:
+        raise DiTConfigValidationError(
+            f"Invalid {field_name} '{value}'. Must be one of {sorted(valid_values)}"
+        )
+
+
+def _ensure_positive(cfg: Any, fields: List[str]) -> None:
+    for field in fields:
+        value = getattr(cfg, field)
+        if value <= 0:
+            raise DiTConfigValidationError(f"{field} ({value}) must be positive")
+
+
+def _ensure_divisible(value: int, divisor: int, value_name: str, divisor_name: str) -> None:
+    if value <= 0 or divisor <= 0 or value % divisor != 0:
+        raise DiTConfigValidationError(
+            f"{value_name} ({value}) must be positive and divisible by {divisor_name} ({divisor})"
+        )
+
+
+def _ensure_in_range(cfg: Any, fields: List[str], min_value: float, max_value: float) -> None:
+    for field in fields:
+        value = getattr(cfg, field)
+        if not (min_value <= value <= max_value):
+            raise DiTConfigValidationError(
+                f"{field} ({value}) must be between {min_value} and {max_value}"
+            )
+
+
+def _ensure_booleans(cfg: Any, fields: List[str]) -> None:
+    for field in fields:
+        value = getattr(cfg, field)
+        if not isinstance(value, bool):
+            raise DiTConfigValidationError(f"{field} must be a boolean value")
+
+
+def _validate_pointnet2_backbone(backbone_cfg: DictConfig) -> None:
+    required_layers = ['layer1', 'layer2', 'layer3', 'layer4']
+    _require_attributes(backbone_cfg, required_layers, prefix="PointNet2 backbone")
+
+    required_layer_params = ['npoint', 'radius_list', 'nsample_list', 'mlp_list']
+
+    for layer_name in required_layers:
+        layer_cfg = getattr(backbone_cfg, layer_name)
+        layer_prefix = f"PointNet2 {layer_name}"
+        _require_attributes(layer_cfg, required_layer_params, prefix=layer_prefix)
+
+        if layer_cfg.npoint <= 0:
+            raise DiTConfigValidationError(f"{layer_prefix} npoint ({layer_cfg.npoint}) must be positive")
+
+        for param in ['radius_list', 'nsample_list', 'mlp_list']:
+            values = _coerce_to_sequence(getattr(layer_cfg, param), f"{layer_prefix} {param}")
+            if len(values) == 0:
+                raise DiTConfigValidationError(f"{layer_prefix} {param} must be non-empty")
+
+
+def _validate_ptv3_backbone(backbone_cfg: DictConfig) -> None:
+    _ensure_optional_positive_int(backbone_cfg, 'in_channels', "PTv3 in_channels")
+    _ensure_optional_positive_number(backbone_cfg, 'grid_size', "PTv3 grid_size")
+    _ensure_optional_positive_int(backbone_cfg, 'max_context_points', "PTv3 max_context_points")
+
+    sequence_fields = [
+        'enc_depths', 'enc_channels', 'enc_num_head', 'enc_patch_size',
+        'dec_depths', 'dec_channels', 'dec_num_head', 'dec_patch_size'
+    ]
+    for field in sequence_fields:
+        if hasattr(backbone_cfg, field):
+            values = _coerce_to_sequence(getattr(backbone_cfg, field), f"PTv3 {field}", allow_scalar=False)
+            if len(values) == 0:
+                raise DiTConfigValidationError(f"PTv3 {field} must be non-empty if provided")
+
+
+def _ensure_optional_positive_int(cfg: Any, field: str, label: str) -> None:
+    if hasattr(cfg, field):
+        value = getattr(cfg, field)
+        if not isinstance(value, int) or value <= 0:
+            raise DiTConfigValidationError(f"{label} ({value}) must be a positive integer if provided")
+
+
+def _ensure_optional_positive_number(cfg: Any, field: str, label: str) -> None:
+    if hasattr(cfg, field):
+        value = getattr(cfg, field)
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise DiTConfigValidationError(f"{label} ({value}) must be a positive number if provided")
+
+
+def _coerce_to_sequence(value: Any, field_name: str, allow_scalar: bool = True) -> List[Any]:
+    if isinstance(value, (list, tuple, ListConfig)):
+        sequence = list(value)
+    elif allow_scalar:
+        sequence = [value]
+    else:
+        raise DiTConfigValidationError(f"{field_name} must be a non-empty sequence if provided")
+
+    if any(isinstance(item, str) for item in sequence):
+        raise DiTConfigValidationError(f"{field_name} must not contain string elements")
+    return sequence
