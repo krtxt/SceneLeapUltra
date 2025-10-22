@@ -1,0 +1,76 @@
+defaults:
+  - decoder: dit  # Can also use 'unet' - Flow Matching works with both!
+  - criterion: loss_standardized
+  - _self_
+
+name: GraspFlowMatching
+save_root: ${save_root}
+device: cuda:0
+rot_type: ${rot_type}
+mode: ${mode}
+print_freq: 250
+batch_size: ${batch_size}
+
+# Flow Matching Specific Parameters
+# ----------------------------------
+# sigma_min: Minimum noise level for numerical stability
+sigma_min: 1.0e-4
+
+# sampler_type: ODE solver for inference
+#   - 'euler': First-order Euler method (fast, requires more steps)
+#   - 'heun': Second-order Heun's method (slower per step, fewer steps needed)
+sampler_type: heun
+
+# num_sampling_steps: Number of ODE integration steps
+#   - Flow Matching typically needs 10-50 steps (vs 100-1000 for DDPM)
+#   - Heun sampler: 25-50 steps usually sufficient
+#   - Euler sampler: 50-100 steps recommended
+num_sampling_steps: 50
+
+# loss_type: Velocity matching loss
+#   - 'l2': MSE loss (default, more stable)
+#   - 'l1': MAE loss (more robust to outliers)
+loss_type: l2
+
+# Optimizer Configuration
+# Similar to DDPM but Flow Matching often trains faster
+optimizer:
+  name: adamw
+  lr: 0.0006
+  weight_decay: 0.001
+
+scheduler:
+  name: steplr
+  t_max: 1000
+  min_lr: 1.0e-05
+  step_size: 100
+  step_gamma: 0.5
+
+# Grasp Generation Control
+fix_num_grasps: ${fix_num_grasps}
+target_num_grasps: ${target_num_grasps}
+
+# Classifier-Free Guidance (CFG)
+# Can be enabled for better quality at inference time
+use_cfg: false
+guidance_scale: 7.5
+
+# Negative Prompts
+use_negative_guidance: false
+negative_guidance_scale: 1.0
+use_negative_prompts: ${use_negative_prompts}
+
+# Conditioning Features
+use_object_mask: ${use_object_mask}
+use_rgb: ${use_rgb}
+
+# WandB Logging Optimization
+wandb_optimization:
+  enable_visualization: false
+  visualization_freq: 20
+  log_histograms: false
+  histogram_freq: 50
+  monitor_system: false
+  log_gradients: false
+  gradient_freq: 1000
+  system_freq: 500

@@ -1,0 +1,10 @@
+defaults:
+  - flow_matching
+  - decoder: unet
+
+# This configuration uses Flow Matching with UNet decoder
+# Flow Matching + UNet offers:
+#   - Simpler training objective than DDPM
+#   - Faster sampling and inference
+#   - Lightweight architecture
+#   - Good for single or few grasps

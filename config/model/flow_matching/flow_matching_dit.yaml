@@ -1,0 +1,10 @@
+defaults:
+  - flow_matching
+  - decoder: dit
+
+# This configuration uses Flow Matching with DiT decoder
+# Flow Matching + DiT offers:
+#   - Simpler training objective than DDPM
+#   - Faster sampling (50 steps vs 100+ for DDPM)
+#   - Transformer architecture for multi-grasp modeling
+#   - Full compatibility with text and scene conditioning
