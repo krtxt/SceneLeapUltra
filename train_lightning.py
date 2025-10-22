@@ -21,6 +21,7 @@ from datasets.scenedex_datamodule import SceneLeapDataModule
 from utils.wandb_callbacks import WandbVisualizationCallback, WandbMetricsCallback
 # from models.diffuser_lightning_copy import DDPMLightning
 from models.diffuser_lightning import DDPMLightning
+from models.flowmatcher_lightning import FlowMatchingLightning
 from models.cvae import GraspCVAELightning
 from utils.logging_utils import setup_basic_logging, setup_file_logging
 from utils.git_utils import get_git_head_hash
@@ -211,6 +212,8 @@ def main(cfg) -> None:
         model = GraspCVAELightning(model_cfg)
     elif cfg.model.name == "GraspDiffuser":
         model = DDPMLightning(model_cfg)
+    elif cfg.model.name == "GraspFlowMatcher":
+        model = FlowMatchingLightning(model_cfg)
     else:
         raise ValueError(f"Unknown model name: {cfg.model.name}")
     datamodule = SceneLeapDataModule(cfg.data_cfg)

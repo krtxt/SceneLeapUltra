@@ -1,6 +1,7 @@
 defaults:
   - _self_
-  - model/diffuser@model: diffuser
+  # - model/diffuser@model: diffuser
+  - model/flowmatcher@model: flowmatcher
   - data_cfg: sceneleapplus
   # - data_cfg: objectcentric
   - distributed: default
