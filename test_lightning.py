@@ -14,6 +14,7 @@ from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 
 from datasets.scenedex_datamodule import SceneLeapDataModule
 from models.diffuser_lightning import DDPMLightning
+from models.flow_matching_lightning import FlowMatchingLightning
 from models.cvae import GraspCVAELightning
 from utils.logging_utils import setup_basic_logging, setup_file_logging
 from utils.git_utils import get_git_head_hash
@@ -214,6 +215,8 @@ def main(cfg: OmegaConf) -> None:
                 model = GraspCVAELightning(test_cfg.model)
             elif test_cfg.model.name == "GraspDiffuser":
                 model = DDPMLightning(test_cfg.model)
+            elif test_cfg.model.name == "GraspFlowMatcher":
+                model = FlowMatchingLightning(test_cfg.model)
             else:
                 raise ValueError(f"Unknown model name: {test_cfg.model.name}")
             datamodule = SceneLeapDataModule(test_cfg.data)

@@ -1,0 +1,60 @@
+defaults:
+  - /model/diffuser/decoder@decoder: dit
+  - /model/diffuser/criterion@criterion: loss_standardized
+  - _self_
+
+name: GraspFlowMatcher
+save_root: ${save_root}
+device: cuda:0
+rot_type: ${rot_type}
+mode: ${mode}
+print_freq: 250
+batch_size: ${batch_size}
+
+use_negative_prompts: ${use_negative_prompts}
+use_object_mask: ${use_object_mask}
+use_rgb: ${use_rgb}
+
+optimizer:
+  name: adamw
+  lr: 0.0006
+  weight_decay: 0.001
+scheduler:
+  name: steplr
+  t_max: 1000
+  min_lr: 1.0e-05
+  step_size: 100
+  step_gamma: 0.5
+
+use_cfg: false
+guidance_scale: 7.5
+use_negative_guidance: false
+negative_guidance_scale: 1.0
+
+fix_num_grasps: ${fix_num_grasps}
+target_num_grasps: ${target_num_grasps}
+
+flow:
+  base_std: 1.0
+  time_sampler: uniform
+  time_eps: 1.0e-03
+  time_embedding_scale: 1000.0
+  velocity_scale: 1.0
+  loss_weighting: none
+  loss_reduction: mean
+
+integrator:
+  method: euler
+  num_steps: 64
+  t_start: 0.0
+  t_end: 1.0
+
+wandb_optimization:
+  enable_visualization: false
+  visualization_freq: 20
+  log_histograms: false
+  histogram_freq: 50
+  monitor_system: false
+  log_gradients: false
+  gradient_freq: 1000
+  system_freq: 500
