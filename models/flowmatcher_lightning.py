@@ -47,6 +47,10 @@ class FlowMatchingLightning(pl.LightningModule):
         # Flow-specific configuration
         self.flow_cfg = cfg.get("flow_cfg", {})
         self.path_type = self.flow_cfg.get("path_type", "rectified").lower()
+        self.enable_diffusion_path = bool(self.flow_cfg.get("enable_diffusion_path", False))
+        if self.path_type == "diffusion" and not self.enable_diffusion_path:
+            logging.info("FlowMatching: diffusion path disabled via flow_cfg.enable_diffusion_path, falling back to rectified path")
+            self.path_type = "rectified"
         self.diffusion_steps = None
         self._prepare_diffusion_schedule_if_needed()
 
@@ -59,10 +63,12 @@ class FlowMatchingLightning(pl.LightningModule):
 
         # Guidance configuration
         self.guidance_cfg = cfg.get("guidance_cfg", {})
+        self.guidance_enabled = bool(self.guidance_cfg.get("enabled", False))
         self.guidance_scale = float(self.guidance_cfg.get("w", 0.0))
         self.guidance_type = self.guidance_cfg.get("stable_guidance_type", "naive").lower()
+        self.enable_zero_init = bool(self.guidance_cfg.get("enable_zero_init", False))
         self.zero_init_threshold = float(self.guidance_cfg.get("zero_init_threshold", 0.0))
-        self.use_cfg = self.guidance_scale > 0.0
+        self.use_cfg = self.guidance_enabled and self.guidance_scale > 0.0
 
         # Internal containers for logging
         self.validation_step_outputs = []
@@ -338,6 +344,8 @@ class FlowMatchingLightning(pl.LightningModule):
             ut = x1 - x0
             return xt, ut
         if self.path_type == "diffusion":
+            if not self.enable_diffusion_path:
+                raise RuntimeError("Diffusion path requested but flow_cfg.enable_diffusion_path is False")
             return self._diffusion_path(x0, x1, t)
         raise ValueError(f"Unsupported flow path type: {self.path_type}")
 
@@ -381,7 +389,7 @@ class FlowMatchingLightning(pl.LightningModule):
         if not self.use_cfg or uncond_batch is None:
             return v_cond
 
-        if t_value.item() < self.zero_init_threshold:
+        if self.enable_zero_init and t_value.item() < self.zero_init_threshold:
             return self.velocity_model(x_t, t_values, uncond_batch)
 
         v_uncond = self.velocity_model(x_t, t_values, uncond_batch)
@@ -400,7 +408,7 @@ class FlowMatchingLightning(pl.LightningModule):
     # ------------------------------------------------------------------
 
     def _prepare_diffusion_schedule_if_needed(self):
-        if self.path_type != "diffusion":
+        if self.path_type != "diffusion" or not self.enable_diffusion_path:
             return
 
         diffusion_cfg = self.flow_cfg.get("diffusion", {})

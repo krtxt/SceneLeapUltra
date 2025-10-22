@@ -19,6 +19,7 @@ target_num_grasps: ${target_num_grasps}
 
 flow_cfg:
   path_type: rectified
+  enable_diffusion_path: false
   diffusion:
     steps: 100
     schedule_cfg:
@@ -35,8 +36,10 @@ ode_solver_cfg:
   atol: 1.0e-5
 
 guidance_cfg:
+  enabled: false
   w: 0.0
-  stable_guidance_type: cfg_zero_star
+  stable_guidance_type: naive
+  enable_zero_init: false
   zero_init_threshold: 0.1
 
 optimizer:
