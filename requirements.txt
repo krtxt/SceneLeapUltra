@@ -1,0 +1,10 @@
+wandb
+h5py
+scipy
+trimesh
+einops
+tqdm
+matplotlib
+opencv-python
+# Note: pointnet2 is a local dependency and needs to be compiled separately.
+# Please refer to the project's documentation for instructions.

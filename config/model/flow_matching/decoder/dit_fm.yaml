@@ -1,5 +1,4 @@
 defaults:
-  # - backbone: ptv3_light
   - backbone: pointnet2
 
 name: dit_fm

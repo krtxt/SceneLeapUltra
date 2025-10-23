@@ -1,6 +1,5 @@
 defaults:
-  # - backbone: pointnet2
-  - backbone: ptv3_light
+  - backbone: pointnet2
 
 name: unet
 rot_type: ${rot_type}

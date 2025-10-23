@@ -91,12 +91,11 @@ def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
     backbone_name = backbone_cfg.name.lower()
     validators = {
         'pointnet2': _validate_pointnet2_backbone,
-        'ptv3': _validate_ptv3_backbone,
     }
 
     if backbone_name not in validators:
         raise DiTConfigValidationError(
-            f"Unsupported backbone '{backbone_cfg.name}'. Supported backbones: 'pointnet2', 'ptv3'"
+            f"Unsupported backbone '{backbone_cfg.name}'. Supported backbone: 'pointnet2' (PTv3 已移除)"
         )
 
     validators[backbone_name](backbone_cfg)
@@ -255,22 +254,6 @@ def _validate_pointnet2_backbone(backbone_cfg: DictConfig) -> None:
             values = _coerce_to_sequence(getattr(layer_cfg, param), f"{layer_prefix} {param}")
             if len(values) == 0:
                 raise DiTConfigValidationError(f"{layer_prefix} {param} must be non-empty")
-
-
-def _validate_ptv3_backbone(backbone_cfg: DictConfig) -> None:
-    _ensure_optional_positive_int(backbone_cfg, 'in_channels', "PTv3 in_channels")
-    _ensure_optional_positive_number(backbone_cfg, 'grid_size', "PTv3 grid_size")
-    _ensure_optional_positive_int(backbone_cfg, 'max_context_points', "PTv3 max_context_points")
-
-    sequence_fields = [
-        'enc_depths', 'enc_channels', 'enc_num_head', 'enc_patch_size',
-        'dec_depths', 'dec_channels', 'dec_num_head', 'dec_patch_size'
-    ]
-    for field in sequence_fields:
-        if hasattr(backbone_cfg, field):
-            values = _coerce_to_sequence(getattr(backbone_cfg, field), f"PTv3 {field}", allow_scalar=False)
-            if len(values) == 0:
-                raise DiTConfigValidationError(f"PTv3 {field} must be non-empty if provided")
 
 
 def _ensure_optional_positive_int(cfg: Any, field: str, label: str) -> None:

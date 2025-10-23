@@ -365,8 +365,7 @@ class DiTFM(nn.Module):
         import copy
         adjusted_cfg = copy.deepcopy(backbone_cfg)
         
-        # Calculate input dimensions
-        total_input_dim = 3 + (3 if use_rgb else 0) + (1 if use_object_mask else 0)
+        # Calculate feature input dimensions
         feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)
         
         backbone_name = getattr(adjusted_cfg, 'name', '').lower()
@@ -376,8 +375,6 @@ class DiTFM(nn.Module):
                 mlp_list = list(adjusted_cfg.layer1.mlp_list)
                 mlp_list[0] = feature_input_dim
                 adjusted_cfg.layer1.mlp_list = mlp_list
-        elif backbone_name == 'ptv3':
-            adjusted_cfg.in_channels = total_input_dim
         
         return adjusted_cfg
     

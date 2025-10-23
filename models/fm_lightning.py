@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from typing import Dict, Optional, Tuple, Any, List
 import logging
 import math
-from statistics import mean
+from statistics import mean, stdev
 
 # Import model building
 from models.decoder import build_decoder
@@ -252,6 +252,7 @@ class FlowMatchingLightning(pl.LightningModule):
     def on_validation_epoch_end(self):
         val_loss = [x["loss"] for x in self.validation_step_outputs]
         avg_loss = mean(val_loss) if val_loss else 0.0
+        loss_std = stdev(val_loss) if len(val_loss) > 1 else 0.0
         
         # Compute detailed losses
         val_detailed_loss = {}
@@ -268,7 +269,7 @@ class FlowMatchingLightning(pl.LightningModule):
             epoch=self.current_epoch, 
             num_batches=len(self.validation_step_outputs),
             avg_loss=avg_loss,
-            loss_std=0.0,
+            loss_std=loss_std,
             loss_min=min(val_loss) if val_loss else 0.0,
             loss_max=max(val_loss) if val_loss else 0.0,
             val_detailed_loss=val_detailed_loss
@@ -277,6 +278,7 @@ class FlowMatchingLightning(pl.LightningModule):
         # Log to wandb
         val_log_dict = {f"val/{k}": v for k, v in val_detailed_loss.items()}
         val_log_dict["val/total_loss"] = avg_loss
+        val_log_dict["val/loss_std"] = loss_std
         self.log_dict(val_log_dict, prog_bar=False, logger=True, on_epoch=True, 
                      batch_size=self.batch_size, sync_dist=True)
         
@@ -633,3 +635,15 @@ class FlowMatchingLightning(pl.LightningModule):
         pred_dict = build_pred_dict_adaptive(pred_x0)
         outputs, targets = self.criterion.infer_norm_process_dict_get_pose(pred_dict, data)
         return outputs, targets
+    
+    def forward_get_pose_matched(self, data: Dict, k: int = 1):
+        """Get matched pose predictions (for visualization)."""
+        data = process_hand_pose_test(data, rot_type=self.rot_type, mode=self.mode)
+        pred_x0 = self.sample(data, k=k)
+        
+        if k > 1:
+            pred_x0 = pred_x0[:, 0]
+        
+        pred_dict = build_pred_dict_adaptive(pred_x0)
+        matched_preds, matched_targets, outputs, targets = self.criterion.forward_infer(pred_dict, data)
+        return matched_preds, matched_targets, outputs, targets

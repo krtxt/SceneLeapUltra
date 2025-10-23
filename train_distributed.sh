@@ -196,4 +196,4 @@ fi
 echo "分布式训练完成"
 
 
-# bash train_distributed.sh --gpus 1 save_root="./experiments/testtest_ptv3" model.steps=100 batch_size=40 'checkpoint_path="experiments/testtest_ptv3/checkpoints/epoch=34-val_loss=56.94.ckpt"'
+# bash train_distributed.sh --gpus 1 save_root="./experiments/test_run" model.steps=100 batch_size=40 'checkpoint_path="experiments/test_run/checkpoints/epoch=34-val_loss=56.94.ckpt"'
