@@ -1,0 +1,59 @@
+defaults:
+  # - backbone: ptv3_light
+  - backbone: pointnet2
+
+name: dit_fm
+rot_type: ${rot_type}
+pred_mode: velocity  # Flow Matching预测模式: velocity(FM)|epsilon(DDPM)|pose(直接)
+
+# Model architecture (reuse DiT structure)
+d_model: 512
+num_layers: 12
+num_heads: 8
+d_head: 64
+dropout: 0.1
+
+# Sequence configuration
+max_sequence_length: 100
+use_learnable_pos_embedding: false
+
+# Time embedding configuration
+time_embed_dim: 1024
+time_embed_mult: 4
+use_adaptive_norm: true
+
+# Flow Matching specific: continuous time embedding
+continuous_time: true
+freq_dim: 256  # Gaussian random Fourier features dimension
+
+# Conditioning configuration
+use_text_condition: ${use_text_condition}
+text_dropout_prob: 0.01
+use_negative_prompts: ${use_negative_prompts}
+use_object_mask: ${use_object_mask}
+use_rgb: ${use_rgb}
+
+# Attention configuration
+attention_dropout: 0.1
+cross_attention_dropout: 0.1
+
+# Feed-forward configuration
+ff_mult: 4
+ff_dropout: 0.1
+
+# Memory optimization
+gradient_checkpointing: false
+use_flash_attention: true
+attention_chunk_size: 512
+memory_monitoring: false
+max_batch_size: 32
+
+enable_memory_efficient_attention: true
+use_gradient_accumulation: false
+memory_fraction: 0.9
+
+# Debug settings
+debug:
+  check_nan: true
+  log_tensor_stats: false
+

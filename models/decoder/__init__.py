@@ -5,6 +5,7 @@
 # from .unet import UNetModel
 from .unet_new import UNetModel
 from .dit import DiTModel
+from .dit_fm import DiTFM
 from .dit_config_validation import validate_dit_compatibility_with_diffuser
 
 def build_decoder(decoder_cfg, diffuser_cfg=None):
@@ -37,5 +38,8 @@ def build_decoder(decoder_cfg, diffuser_cfg=None):
         if diffuser_cfg is not None:
             validate_dit_compatibility_with_diffuser(decoder_cfg, diffuser_cfg)
         return DiTModel(decoder_cfg)
+    elif decoder_cfg.name.lower() == "dit_fm":
+        # DiT for Flow Matching
+        return DiTFM(decoder_cfg)
     else:
         raise NotImplementedError(f"No such decode: {decoder_cfg.name}")
