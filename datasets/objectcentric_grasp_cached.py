@@ -2,6 +2,7 @@
 
 import atexit
 import copy
+import hashlib
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -113,7 +114,8 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
         else:
             suffix += "_noex"
 
-        modified.cache_version = f"{self.cache_version}{suffix}"
+        succ_hash = hashlib.md5(os.path.abspath(self.config.succ_grasp_dir).encode("utf-8")).hexdigest()[:8]
+        modified.cache_version = f"{self.cache_version}{suffix}_succ{succ_hash}"
         return modified
 
     def _cleanup(self) -> None:

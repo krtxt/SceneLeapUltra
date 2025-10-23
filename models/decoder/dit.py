@@ -2,7 +2,11 @@ import torch
 import torch.nn as nn
 import math
 import logging
-from typing import Dict, Optional, Any, Tuple
+from typing import Dict, Optional, Any, Tuple, Sequence
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy should be available but guard anyway
+    np = None
 from einops import rearrange
 from contextlib import nullcontext
 
@@ -18,6 +22,150 @@ from .dit_memory_optimization import (
     MemoryMonitor, EfficientAttention, GradientCheckpointedDiTBlock,
     BatchProcessor, optimize_memory_usage, get_memory_optimization_config
 )
+
+
+def _convert_to_tensor(
+    value: Any,
+    device: torch.device,
+    dtype: torch.dtype,
+    name: str,
+) -> torch.Tensor:
+    """
+    Converts various container types (tensor/list/tuple/numpy array) to a torch.Tensor.
+    Ensures the result resides on the requested device and dtype.
+    """
+    if isinstance(value, torch.Tensor):
+        return value.to(device=device, dtype=dtype)
+
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            raise DiTConditioningError(f"{name} list is empty")
+
+        if all(isinstance(elem, torch.Tensor) for elem in value):
+            return _pad_and_stack_tensors(value, device, dtype, name)
+
+        if np is not None and all(isinstance(elem, np.ndarray) for elem in value):
+            tensors = [torch.as_tensor(elem) for elem in value]
+            return _pad_and_stack_tensors(tensors, device, dtype, name)
+
+        try:
+            return torch.as_tensor(value, dtype=dtype, device=device)
+        except Exception as exc:  # pragma: no cover - defensive branch
+            raise DiTConditioningError(
+                f"{name} list cannot be converted to tensor: {exc}"
+            ) from exc
+
+    if np is not None and isinstance(value, np.ndarray):
+        return torch.from_numpy(value).to(device=device, dtype=dtype)
+
+    raise DiTConditioningError(
+        f"{name} must be a torch.Tensor, numpy.ndarray, or sequence convertible to tensor. "
+        f"Got {type(value)}"
+    )
+
+
+def _pad_and_stack_tensors(
+    tensors: Sequence[torch.Tensor],
+    device: torch.device,
+    dtype: torch.dtype,
+    name: str,
+) -> torch.Tensor:
+    """
+    Pads variable-length tensors along the first dimension to enable stacking.
+
+    Assumes all tensors share the same rank and feature dimensions (other than the first).
+    """
+    if len(tensors) == 0:
+        raise DiTConditioningError(f"{name} tensor list is empty")
+
+    ref_ndim = tensors[0].ndim
+    if ref_ndim == 0:
+        raise DiTConditioningError(f"{name} tensors must have at least one dimension")
+
+    feature_shape = tensors[0].shape[1:]
+    for idx, tensor in enumerate(tensors):
+        if tensor.ndim != ref_ndim:
+            raise DiTConditioningError(
+                f"{name} tensors must have consistent rank; tensor {idx} has ndim {tensor.ndim}, "
+                f"expected {ref_ndim}"
+            )
+        if tensor.shape[1:] != feature_shape:
+            raise DiTConditioningError(
+                f"{name} tensors must share feature dimensions; tensor {idx} has shape {tensor.shape}, "
+                f"expected (*, {feature_shape})"
+            )
+
+    max_length = max(tensor.shape[0] for tensor in tensors)
+    batch_size = len(tensors)
+
+    padded = torch.zeros(
+        (batch_size, max_length) + feature_shape,
+        device=device,
+        dtype=dtype
+    )
+
+    for idx, tensor in enumerate(tensors):
+        tensor = tensor.to(device=device, dtype=dtype)
+        length = tensor.shape[0]
+        if length == 0:
+            continue
+        padded[idx, :length] = tensor
+
+    return padded
+
+
+def _normalize_object_mask(
+    scene_points: torch.Tensor,
+    object_mask: torch.Tensor,
+    name: str = "object_mask",
+) -> torch.Tensor:
+    """
+    Aligns an object mask to match the scene point cloud layout.
+
+    Ensures the mask has shape (B, N, 1) where B is batch size and N is number of points.
+    """
+    if object_mask.numel() == 0:
+        raise DiTConditioningError(f"{name} is empty while use_object_mask=True")
+
+    mask = object_mask
+    if mask.dim() == 1:
+        if mask.shape[0] != scene_points.shape[1]:
+            raise DiTConditioningError(
+                f"{name} length {mask.shape[0]} does not match point count {scene_points.shape[1]}"
+            )
+        mask = mask.unsqueeze(0).expand(scene_points.shape[0], -1)
+    elif mask.dim() == 2:
+        if mask.shape[0] == scene_points.shape[0] and mask.shape[1] == scene_points.shape[1]:
+            pass
+        elif mask.shape[0] == scene_points.shape[1] and mask.shape[1] == scene_points.shape[0]:
+            mask = mask.t()
+        else:
+            raise DiTConditioningError(
+                f"{name} shape {mask.shape} is incompatible with scene points "
+                f"{(scene_points.shape[0], scene_points.shape[1])}"
+            )
+    elif mask.dim() == 3:
+        if (
+            mask.shape[0] != scene_points.shape[0]
+            or mask.shape[1] != scene_points.shape[1]
+            or mask.shape[2] != 1
+        ):
+            raise DiTConditioningError(
+                f"{name} shape {mask.shape} must match (batch, num_points, 1)"
+            )
+    else:
+        raise DiTConditioningError(f"{name} must have 1, 2, or 3 dimensions, got {mask.dim()}")
+
+    if mask.dim() == 2:
+        mask = mask.unsqueeze(-1)
+
+    mask = mask.to(device=scene_points.device, dtype=torch.float32)
+
+    if torch.all(mask == 0):
+        raise DiTConditioningError(f"{name} contains only zeros while use_object_mask=True")
+
+    mask = torch.clamp(mask, 0.0, 1.0)
+    return mask
 
 
 class GraspTokenizer(nn.Module):
@@ -673,12 +821,13 @@ class DiTModel(nn.Module):
         if 'scene_pc' not in data or data['scene_pc'] is None:
             raise DiTConditioningError("Missing scene_pc in conditioning data")
 
-        scene_pc = data['scene_pc']
-        if not isinstance(scene_pc, torch.Tensor):
-            raise DiTConditioningError(f"scene_pc must be torch.Tensor, got {type(scene_pc)}")
-
         model_device = self._get_device()
-        scene_pc = scene_pc.to(model_device, dtype=torch.float32)
+        scene_pc = _convert_to_tensor(
+            data['scene_pc'],
+            device=model_device,
+            dtype=torch.float32,
+            name="scene_pc"
+        )
         self.logger.debug(
             f"[Conditioning] scene_pc input: shape={tuple(scene_pc.shape)}, "
             f"min={scene_pc.min():.6f}, max={scene_pc.max():.6f}"
@@ -689,9 +838,13 @@ class DiTModel(nn.Module):
             self.logger.debug(f"[Conditioning] Removed RGB, scene_pc shape: {tuple(scene_pc.shape)}")
 
         if self.use_object_mask and 'object_mask' in data and data['object_mask'] is not None:
-            object_mask = data['object_mask'].to(model_device, dtype=torch.float32)
-            if object_mask.dim() == 2:
-                object_mask = object_mask.unsqueeze(-1)
+            object_mask = _convert_to_tensor(
+                data['object_mask'],
+                device=model_device,
+                dtype=torch.float32,
+                name="object_mask"
+            )
+            object_mask = _normalize_object_mask(scene_pc, object_mask)
             scene_points = torch.cat([scene_pc, object_mask], dim=-1)
             self.logger.debug(f"[Conditioning] Added object_mask, pos shape: {tuple(scene_points.shape)}")
         else:
@@ -715,8 +868,14 @@ class DiTModel(nn.Module):
 
     def _build_fallback_scene_features(self, data: Dict) -> torch.Tensor:
         batch_size = 1
-        if 'scene_pc' in data and isinstance(data['scene_pc'], torch.Tensor):
-            batch_size = data['scene_pc'].shape[0]
+        if 'scene_pc' in data:
+            scene_pc = data['scene_pc']
+            if isinstance(scene_pc, torch.Tensor):
+                batch_size = scene_pc.shape[0]
+            elif isinstance(scene_pc, (list, tuple)):
+                batch_size = len(scene_pc)
+            elif np is not None and isinstance(scene_pc, np.ndarray):
+                batch_size = scene_pc.shape[0]
         model_device = self._get_device()
         scene_feat_raw = torch.zeros(batch_size, 1024, 512, device=model_device)
         self.logger.warning("Using fallback scene features due to extraction failure")
