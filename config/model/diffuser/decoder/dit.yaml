@@ -1,5 +1,6 @@
 defaults:
-  - backbone: pointnet2
+  # - backbone: pointnet2
+  - backbone: ptv3_light
 
 name: dit
 rot_type: ${rot_type}

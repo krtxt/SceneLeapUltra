@@ -25,6 +25,11 @@ from models.utils.prediction import build_pred_dict_adaptive
 from models.utils.logging_helpers import log_validation_summary
 from models.utils.log_colors import HEADER, BLUE, GREEN, YELLOW, RED, ENDC, BOLD
 
+# Flow Matching components
+from models.fm.solvers import integrate_ode as fm_integrate_ode
+from models.fm.paths import get_path_fn, add_stochasticity
+from models.fm.guidance import apply_cfg as fm_apply_cfg, predictor_corrector_step as fm_predictor_corrector_step
+
 
 class FlowMatchingLightning(pl.LightningModule):
     """
@@ -61,11 +66,27 @@ class FlowMatchingLightning(pl.LightningModule):
         self.t_sampler = self.fm_cfg.get('t_sampler', 'uniform')
         self.t_weight = self.fm_cfg.get('t_weight', None)
         self.continuous_time = self.fm_cfg.get('continuous_time', True)
+        self.noise_dist = self.fm_cfg.get('noise_dist', 'normal')
+        self.sfm_sigma = self.fm_cfg.get('sfm', {}).get('sigma', 0.0)
+
+        # Path function (fallback to linear_ot when unknown)
+        try:
+            self.path_fn = get_path_fn(self.path_type)
+        except Exception as e:
+            logging.warning(f"Unknown path type '{self.path_type}', falling back to 'linear_ot': {e}")
+            self.path_type = 'linear_ot'
+            self.path_fn = get_path_fn(self.path_type)
         
         # Solver configs
         self.solver_cfg = cfg.solver
         self.solver_type = self.solver_cfg.get('type', 'rk4')
         self.nfe = self.solver_cfg.get('nfe', 32)
+        self.rtol = self.solver_cfg.get('rtol', 1e-3)
+        self.atol = self.solver_cfg.get('atol', 1e-5)
+        self.max_step = self.solver_cfg.get('max_step', 0.03125)
+        self.min_step = self.solver_cfg.get('min_step', 1e-4)
+        self.reverse_time = self.solver_cfg.get('reverse_time', True)
+        self.save_trajectories = self.solver_cfg.get('save_trajectories', False)
         
         # Guidance configs
         self.guidance_cfg = cfg.guidance
@@ -73,7 +94,13 @@ class FlowMatchingLightning(pl.LightningModule):
         self.cond_drop_prob = self.guidance_cfg.get('cond_drop_prob', 0.1)
         self.guidance_scale = self.guidance_cfg.get('scale', 3.0)
         self.diff_clip = self.guidance_cfg.get('diff_clip', 5.0)
+        self.guidance_method = self.guidance_cfg.get('method', 'clipped')
+        self.early_steps_scale = self.guidance_cfg.get('early_steps_scale', 0.0)
+        self.late_steps_scale = self.guidance_cfg.get('late_steps_scale', 1.0)
+        self.transition_point = self.guidance_cfg.get('transition_point', 0.5)
         self.use_pc_correction = self.guidance_cfg.get('pc_correction', False)
+        self.dt_correction = self.guidance_cfg.get('dt_correction', 0.01)
+        self.num_corrections = self.guidance_cfg.get('num_corrections', 1)
         
         # Optimizer and scheduler configs
         self.optimizer_cfg = cfg.optimizer
@@ -125,11 +152,12 @@ class FlowMatchingLightning(pl.LightningModule):
         x1 = torch.randn_like(x0, device=self.device)
         
         # Compute interpolation and target velocity
-        if self.path_type == 'linear_ot':
-            # Linear optimal transport path
-            x_t, v_star = self._linear_ot_path(x0, x1, t)
-        else:
-            raise NotImplementedError(f"Path type {self.path_type} not implemented")
+        # Use FM paths module
+        x_t, v_star = self.path_fn(x0, x1, t)
+
+        # Stochastic Flow Matching (training ablation)
+        if self.sfm_sigma and self.sfm_sigma > 0:
+            v_star = add_stochasticity(v_star, sigma=float(self.sfm_sigma))
         
         # Check for NaN
         if self.check_nan:
@@ -172,7 +200,13 @@ class FlowMatchingLightning(pl.LightningModule):
         # From linear OT: x_t = (1-t)*x0 + t*x1, v = x1 - x0
         # Therefore: x0 = x_t - t*v
         t_expanded = t.view(-1, 1, 1)
-        pred_x0 = x_t - t_expanded * v_pred
+        if self.path_type == 'linear_ot':
+            pred_x0 = x_t - t_expanded * v_pred
+        else:
+            # Only linear_ot supports this simple inversion reliably
+            if self.keep_ddpm_interface:
+                raise NotImplementedError("keep_ddpm_interface only supports x0 reconstruction when path=linear_ot")
+            pred_x0 = None
         
         if self.keep_ddpm_interface:
             pred_dict = {
@@ -237,54 +271,157 @@ class FlowMatchingLightning(pl.LightningModule):
         
         # Compute validation losses
         loss_dict = self.criterion(pred_dict, batch, mode='val')
-        loss = sum(v * self.loss_weights[k] for k, v in loss_dict.items() 
-                  if k in self.loss_weights and torch.is_tensor(v))
-        
-        self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
-        
-        self.validation_step_outputs.append({
-            "loss": loss.item(),
-            "loss_dict": {k: v.item() if torch.is_tensor(v) else v for k, v in loss_dict.items()}
-        })
-        
+
+        # Handle standardized validation loss (align with DDPMLightning)
+        if hasattr(self.criterion, 'use_standardized_val_loss') and self.criterion.use_standardized_val_loss:
+            # Extract standard losses for logging
+            standard_loss_dict = loss_dict.pop('_standard_losses', {})
+
+            # Calculate standardized total loss
+            std_weights = getattr(self.criterion, 'std_val_weights', {})
+            loss = sum(
+                v * std_weights.get(k, 0)
+                for k, v in loss_dict.items()
+                if k in std_weights and std_weights[k] > 0
+            )
+
+            # Calculate standard total loss for comparison
+            standard_loss = sum(
+                v * self.loss_weights[k]
+                for k, v in standard_loss_dict.items()
+                if k in self.loss_weights
+            )
+
+            # Log both losses
+            self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
+            self.log("val/standardized_loss", loss, prog_bar=True, batch_size=batch_size, sync_dist=True)
+            self.log("val/standard_loss", standard_loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
+
+            # Store both for epoch-end processing
+            self.validation_step_outputs.append({
+                "loss": loss.item(),
+                "standardized_loss": loss.item(),
+                "standard_loss": standard_loss.item(),
+                "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
+                "standard_loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in standard_loss_dict.items()},
+            })
+        else:
+            # Standard validation loss calculation
+            loss = sum(
+                v * self.loss_weights[k]
+                for k, v in loss_dict.items()
+                if k in self.loss_weights and torch.is_tensor(v)
+            )
+            self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
+
+            self.validation_step_outputs.append({
+                "loss": loss.item(),
+                "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
+            })
+
         return {"loss": loss, "loss_dict": loss_dict}
     
     def on_validation_epoch_end(self):
         val_loss = [x["loss"] for x in self.validation_step_outputs]
         avg_loss = mean(val_loss) if val_loss else 0.0
         loss_std = stdev(val_loss) if len(val_loss) > 1 else 0.0
-        
-        # Compute detailed losses
-        val_detailed_loss = {}
-        if self.validation_step_outputs:
-            for k in self.validation_step_outputs[0]["loss_dict"].keys():
-                # Handle both scalar and tensor values, skip dicts
-                values = [x["loss_dict"][k] for x in self.validation_step_outputs]
-                # Only compute mean for numeric values (skip nested dicts)
-                if values and not isinstance(values[0], dict):
-                    val_detailed_loss[k] = mean(values)
-        
-        # Log validation summary
-        log_validation_summary(
-            epoch=self.current_epoch, 
-            num_batches=len(self.validation_step_outputs),
-            avg_loss=avg_loss,
-            loss_std=loss_std,
-            loss_min=min(val_loss) if val_loss else 0.0,
-            loss_max=max(val_loss) if val_loss else 0.0,
-            val_detailed_loss=val_detailed_loss
+
+        # Detect if standardized validation loss is used
+        using_standardized = (
+            hasattr(self.criterion, 'use_standardized_val_loss') and
+            self.criterion.use_standardized_val_loss and
+            len(self.validation_step_outputs) > 0 and
+            ("standardized_loss" in self.validation_step_outputs[0])
         )
-        
-        # Log to wandb
-        val_log_dict = {f"val/{k}": v for k, v in val_detailed_loss.items()}
-        val_log_dict["val/total_loss"] = avg_loss
-        val_log_dict["val/loss_std"] = loss_std
-        self.log_dict(val_log_dict, prog_bar=False, logger=True, on_epoch=True, 
-                     batch_size=self.batch_size, sync_dist=True)
-        
-        # Log for checkpoint
-        self.log('val_loss', avg_loss, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
-        
+
+        if using_standardized:
+            # Aggregate standardized and standard losses
+            std_loss = [x["standardized_loss"] for x in self.validation_step_outputs]
+            standard_loss = [x["standard_loss"] for x in self.validation_step_outputs]
+
+            avg_std_loss = mean(std_loss) if std_loss else 0.0
+            avg_standard_loss = mean(standard_loss) if standard_loss else 0.0
+
+            # Detailed losses for standardized
+            val_detailed_loss = {}
+            if self.validation_step_outputs:
+                for k in self.validation_step_outputs[0]["loss_dict"].keys():
+                    val_detailed_loss[k] = mean([x["loss_dict"][k] for x in self.validation_step_outputs])
+
+            # Detailed losses for standard (for comparison)
+            standard_detailed_loss = {}
+            if self.validation_step_outputs and ("standard_loss_dict" in self.validation_step_outputs[0]):
+                for k in self.validation_step_outputs[0]["standard_loss_dict"].keys():
+                    standard_detailed_loss[k] = mean([x["standard_loss_dict"][k] for x in self.validation_step_outputs])
+
+            # Statistics for standardized loss
+            std_loss_std = torch.std(torch.tensor(std_loss)).item() if len(std_loss) > 1 else 0.0
+            std_loss_min = min(std_loss) if std_loss else 0.0
+            std_loss_max = max(std_loss) if std_loss else 0.0
+
+            # Log validation summary (standardized)
+            log_validation_summary(
+                epoch=self.current_epoch,
+                num_batches=len(self.validation_step_outputs),
+                avg_loss=avg_std_loss,
+                loss_std=std_loss_std,
+                loss_min=std_loss_min,
+                loss_max=std_loss_max,
+                val_detailed_loss=val_detailed_loss,
+            )
+
+            # Log standardized validation losses
+            val_log_dict = {f"val/std_{k}": v for k, v in val_detailed_loss.items()}
+            val_log_dict.update({
+                "val/standardized_total_loss": avg_std_loss,
+                "val/std_loss_std": std_loss_std,
+                "val/std_loss_min": std_loss_min,
+                "val/std_loss_max": std_loss_max,
+            })
+
+            # Log standard (original) losses for comparison
+            standard_log_dict = {f"val/orig_{k}": v for k, v in standard_detailed_loss.items()}
+            standard_log_dict.update({
+                "val/original_total_loss": avg_standard_loss,
+            })
+            val_log_dict.update(standard_log_dict)
+
+            self.log_dict(val_log_dict, prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
+
+            # Use standardized loss for ModelCheckpoint
+            self.log('val_loss', avg_std_loss, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
+            # Also log both for manual comparison
+            self.log('val_loss_standardized', avg_std_loss, prog_bar=False, batch_size=self.batch_size, sync_dist=True)
+            self.log('val_loss_original', avg_standard_loss, prog_bar=False, batch_size=self.batch_size, sync_dist=True)
+        else:
+            # Compute detailed losses (standard)
+            val_detailed_loss = {}
+            if self.validation_step_outputs:
+                for k in self.validation_step_outputs[0]["loss_dict"].keys():
+                    values = [x["loss_dict"][k] for x in self.validation_step_outputs]
+                    if values and not isinstance(values[0], dict):
+                        val_detailed_loss[k] = mean(values)
+
+            # Log validation summary (standard)
+            log_validation_summary(
+                epoch=self.current_epoch,
+                num_batches=len(self.validation_step_outputs),
+                avg_loss=avg_loss,
+                loss_std=loss_std,
+                loss_min=min(val_loss) if val_loss else 0.0,
+                loss_max=max(val_loss) if val_loss else 0.0,
+                val_detailed_loss=val_detailed_loss,
+            )
+
+            # Log to wandb
+            val_log_dict = {f"val/{k}": v for k, v in val_detailed_loss.items()}
+            val_log_dict["val/total_loss"] = avg_loss
+            val_log_dict["val/loss_std"] = loss_std
+            self.log_dict(val_log_dict, prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
+
+            # Log for checkpoint
+            self.log('val_loss', avg_loss, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
+
         self.validation_step_outputs.clear()
     
     # =====================
@@ -335,65 +472,41 @@ class FlowMatchingLightning(pl.LightningModule):
     
     def _integrate_ode(self, x1: torch.Tensor, data: Dict) -> torch.Tensor:
         """
-        Integrate the ODE dx/dt = v_θ(x, t) from t=1 to t=0.
-        
-        Args:
-            x1: Initial state (noise) [B, num_grasps, D]
-            data: Conditioning data
-            
-        Returns:
-            x0: Final state (denoised) [B, num_grasps, D]
+        Integrate ODE via models.fm.solvers unified interface.
         """
-        if self.solver_type == 'heun':
-            return self._heun_solver(x1, data)
-        elif self.solver_type == 'rk4':
-            return self._rk4_solver(x1, data)
-        else:
-            raise NotImplementedError(f"Solver {self.solver_type} not implemented")
+        def velocity_fn(x: torch.Tensor, t_tensor: torch.Tensor, d: Dict) -> torch.Tensor:
+            v = self._velocity_fn(x, t_tensor, d)
+            # Optional SFM during sampling
+            if self.sfm_sigma and self.sfm_sigma > 0 and not self.training:
+                v = add_stochasticity(v, sigma=float(self.sfm_sigma))
+            return v
+
+        x0, info = fm_integrate_ode(
+            velocity_fn=velocity_fn,
+            x1=x1,
+            data=data,
+            solver_type=self.solver_type,
+            nfe=int(self.nfe),
+            rtol=float(self.rtol),
+            atol=float(self.atol),
+            max_step=float(self.max_step) if self.max_step is not None else None,
+            min_step=float(self.min_step),
+            reverse_time=bool(self.reverse_time),
+            save_trajectory=bool(self.save_trajectories),
+        )
+
+        # Optional: log solver stats
+        if self.trainer is not None and self.trainer.is_global_zero and isinstance(info, dict) and 'stats' in info:
+            stats = info['stats']
+            try:
+                self.log("sample/nfe", stats.get('nfe', 0), prog_bar=False, logger=True, on_step=False, on_epoch=True)
+                self.log("sample/effective_nfe", stats.get('effective_nfe', 0), prog_bar=False, logger=True, on_step=False, on_epoch=True)
+            except Exception:
+                pass
+
+        return x0
     
-    def _heun_solver(self, x1: torch.Tensor, data: Dict) -> torch.Tensor:
-        """Heun's method (2nd order Runge-Kutta)."""
-        dt = 1.0 / self.nfe
-        x = x1.clone()
-        
-        for i in range(self.nfe):
-            t = 1.0 - i * dt  # Time from 1 to dt
-            t_tensor = torch.full((x.shape[0],), t, device=self.device)
-            
-            # Predictor step
-            v = self._velocity_fn(x, t_tensor, data)
-            x_mid = x - 0.5 * dt * v
-            
-            # Corrector step
-            t_mid_tensor = torch.full((x.shape[0],), t - 0.5 * dt, device=self.device)
-            v_mid = self._velocity_fn(x_mid, t_mid_tensor, data)
-            x = x - dt * v_mid
-        
-        return x
     
-    def _rk4_solver(self, x1: torch.Tensor, data: Dict) -> torch.Tensor:
-        """4th order Runge-Kutta method."""
-        dt = 1.0 / self.nfe
-        x = x1.clone()
-        
-        for i in range(self.nfe):
-            t = 1.0 - i * dt
-            t_tensor = torch.full((x.shape[0],), t, device=self.device)
-            
-            # RK4 steps
-            k1 = self._velocity_fn(x, t_tensor, data)
-            
-            t2_tensor = torch.full((x.shape[0],), t - 0.5 * dt, device=self.device)
-            k2 = self._velocity_fn(x - 0.5 * dt * k1, t2_tensor, data)
-            k3 = self._velocity_fn(x - 0.5 * dt * k2, t2_tensor, data)
-            
-            t4_tensor = torch.full((x.shape[0],), t - dt, device=self.device)
-            k4 = self._velocity_fn(x - dt * k3, t4_tensor, data)
-            
-            # Update
-            x = x - dt * (k1 + 2*k2 + 2*k3 + k4) / 6.0
-        
-        return x
     
     def _velocity_fn(self, x: torch.Tensor, t: torch.Tensor, data: Dict) -> torch.Tensor:
         """
@@ -408,79 +521,50 @@ class FlowMatchingLightning(pl.LightningModule):
             v: Velocity field [B, num_grasps, D]
         """
         if not self.use_cfg or self.training:
-            # No CFG during training or if disabled
+            # Return conditional velocity during training or when CFG is disabled
             return self.model(x, t, data)
-        
-        # Classifier-free guidance
-        # Compute conditional and unconditional velocities
+
+        # Classifier-Free Guidance in inference
         v_cond = self.model(x, t, data)
-        
-        # Create unconditional data
+
+        # Build unconditional branch
         data_uncond = data.copy()
         for key in ['scene_cond', 'text_cond']:
             if key in data_uncond and data_uncond[key] is not None:
                 data_uncond[key] = torch.zeros_like(data_uncond[key])
-        
+
         v_uncond = self.model(x, t, data_uncond)
-        
-        # Apply CFG with optional clipping
-        v = self._apply_cfg(v_cond, v_uncond)
-        
-        # Optional predictor-corrector
+
+        # Apply CFG with models.fm.guidance (supports multiple strategies)
+        v = fm_apply_cfg(
+            v_cond=v_cond,
+            v_uncond=v_uncond,
+            scale=float(self.guidance_scale),
+            method=str(self.guidance_method),
+            clip_norm=float(self.diff_clip),
+            t=t,
+            early_steps_scale=float(self.early_steps_scale),
+            late_steps_scale=float(self.late_steps_scale),
+            transition_point=float(self.transition_point),
+        )
+
+        # Optional predictor-corrector refinement
         if self.use_pc_correction:
-            v = self._pc_correction(x, t, v, data)
-        
+            v = fm_predictor_corrector_step(
+                x=x,
+                t=t,
+                v=v,
+                velocity_fn=lambda xp, tp, d: self.model(xp, tp, d),
+                data=data,
+                dt_correction=float(self.dt_correction),
+                num_corrections=int(self.num_corrections),
+            )
+
         return v
     
-    def _apply_cfg(self, v_cond: torch.Tensor, v_uncond: torch.Tensor) -> torch.Tensor:
-        """
-        Apply classifier-free guidance with stability improvements.
-        
-        Args:
-            v_cond: Conditional velocity [B, num_grasps, D]
-            v_uncond: Unconditional velocity [B, num_grasps, D]
-            
-        Returns:
-            v_cfg: Guided velocity [B, num_grasps, D]
-        """
-        # Compute difference
-        diff = v_cond - v_uncond
-        
-        # Apply norm clipping/rescaling if specified
-        if self.diff_clip > 0:
-            diff_norm = torch.norm(diff, dim=-1, keepdim=True)
-            scale = torch.minimum(
-                torch.ones_like(diff_norm),
-                self.diff_clip / (diff_norm + 1e-8)
-            )
-            diff = diff * scale
-        
-        # Apply guidance
-        v_cfg = v_cond + self.guidance_scale * diff
-        
-        return v_cfg
     
-    def _pc_correction(self, x: torch.Tensor, t: torch.Tensor, v: torch.Tensor, 
-                      data: Dict) -> torch.Tensor:
-        """
-        Optional predictor-corrector step for improved accuracy.
-        
-        Args:
-            x: Current state [B, num_grasps, D]
-            t: Current time [B]
-            v: Predicted velocity [B, num_grasps, D]
-            data: Conditioning data
-            
-        Returns:
-            v_corrected: Corrected velocity [B, num_grasps, D]
-        """
-        # Simple PC: take a small step and re-evaluate
-        dt_pc = 0.01  # Small step for correction
-        x_pred = x - dt_pc * v
-        v_corrected = self.model(x_pred, t - dt_pc, data)
-        
-        # Average predictor and corrector
-        return 0.5 * (v + v_corrected)
+    
+    
     
     # =====================
     # Path and Time Utilities
@@ -533,30 +617,7 @@ class FlowMatchingLightning(pl.LightningModule):
         
         return weight
     
-    def _linear_ot_path(self, x0: torch.Tensor, x1: torch.Tensor, 
-                        t: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Linear optimal transport path.
-        
-        Args:
-            x0: Start point (data) [B, num_grasps, D]
-            x1: End point (noise) [B, num_grasps, D]
-            t: Time values [B]
-            
-        Returns:
-            x_t: Interpolated state [B, num_grasps, D]
-            v_star: Target velocity [B, num_grasps, D]
-        """
-        # Expand t for broadcasting
-        t_expanded = t.view(-1, 1, 1)  # [B, 1, 1]
-        
-        # Linear interpolation
-        x_t = (1 - t_expanded) * x0 + t_expanded * x1
-        
-        # Constant velocity for linear path
-        v_star = x1 - x0
-        
-        return x_t, v_star
+    
     
     # =====================
     # Optimizer Configuration

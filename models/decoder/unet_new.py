@@ -53,6 +53,16 @@ class UNetModel(nn.Module):
         # Adjust backbone config based on use_rgb and use_object_mask
         backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
         self.scene_model = build_backbone(backbone_cfg)
+        
+        # Scene feature projection to match model dimension
+        # Get backbone output dimension (PointNet2=512, PTv3_light=256, PTv3=512)
+        backbone_out_dim = getattr(self.scene_model, 'output_dim', 512)
+        if backbone_out_dim != self.d_model:
+            self.scene_projection = nn.Linear(backbone_out_dim, self.d_model)
+            logging.info(f"UNet scene projection: {backbone_out_dim} -> {self.d_model}")
+        else:
+            self.scene_projection = nn.Identity()
+        
         self.text_encoder = None  # Lazily initialized
         self.text_processor = TextConditionProcessor(
             text_dim=512,
@@ -76,7 +86,7 @@ class UNetModel(nn.Module):
     def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
         """
         Adjusts the backbone configuration based on use_rgb and use_object_mask settings.
-        Supports PointNet2 backbone.
+        Supports PointNet2 and PTv3 backbones.
 
         Args:
             backbone_cfg: Original backbone configuration
@@ -107,6 +117,17 @@ class UNetModel(nn.Module):
                 mlp_list = list(adjusted_cfg.layer1.mlp_list)
                 mlp_list[0] = feature_input_dim  # RGB (optional) + optional mask
                 adjusted_cfg.layer1.mlp_list = mlp_list
+        elif backbone_name == 'ptv3':
+            # For PTv3: store feature dimension for validation/logging
+            # Actual feature handling is done dynamically in PTV3Backbone.forward
+            from omegaconf import OmegaConf
+            OmegaConf.set_struct(adjusted_cfg, False)
+            adjusted_cfg.input_feature_dim = feature_input_dim
+            OmegaConf.set_struct(adjusted_cfg, True)
+            logging.debug(
+                f"PTv3 backbone configured: use_rgb={use_rgb}, "
+                f"use_object_mask={use_object_mask}, feature_dim={feature_input_dim}"
+            )
 
         return adjusted_cfg
 
@@ -272,6 +293,7 @@ class UNetModel(nn.Module):
         
         _, scene_feat = self.scene_model(pos)
         scene_feat = scene_feat.permute(0, 2, 1).contiguous()  # (B, N, C)
+        scene_feat = self.scene_projection(scene_feat)  # Project to d_model if needed
 
         condition_dict = {"scene_cond": scene_feat, "text_cond": None, "text_mask": None}
         if self.use_negative_prompts:

@@ -27,6 +27,9 @@ class Pointnet2Backbone(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
+        
+        # Output dimension (for interface compatibility with PTv3)
+        self.output_dim = 512
 
         self.sa1 = PointnetSAModuleVotes(
             npoint=cfg.layer1.npoint,

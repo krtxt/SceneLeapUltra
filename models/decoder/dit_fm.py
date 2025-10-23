@@ -140,6 +140,10 @@ class DiTFM(nn.Module):
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+        # Attention optimization config (pass-through to DiT blocks)
+        self.use_flash_attention = getattr(cfg, 'use_flash_attention', False)
+        self.attention_chunk_size = getattr(cfg, 'attention_chunk_size', 512)
+
         # Core components
         self.grasp_tokenizer = GraspTokenizer(self.d_x, self.d_model)
         
@@ -176,7 +180,9 @@ class DiTFM(nn.Module):
                 d_head=self.d_head,
                 dropout=self.dropout,
                 use_adaptive_norm=self.use_adaptive_norm,
-                time_embed_dim=self.time_embed_dim if self.use_adaptive_norm else None
+                time_embed_dim=self.time_embed_dim if self.use_adaptive_norm else None,
+                chunk_size=self.attention_chunk_size,
+                use_flash_attention=self.use_flash_attention,
             )
             for _ in range(self.num_layers)
         ])
@@ -192,7 +198,12 @@ class DiTFM(nn.Module):
         # Conditioning modules (reuse from DiT)
         backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
         self.scene_model = build_backbone(backbone_cfg)
-        self.scene_projection = nn.Linear(512, self.d_model)
+        
+        # Scene feature projection to match model dimension
+        # Get backbone output dimension (PointNet2=512, PTv3_light=512, PTv3=512)
+        backbone_out_dim = getattr(self.scene_model, 'output_dim', 512)
+        self.scene_projection = nn.Linear(backbone_out_dim, self.d_model)
+        self.logger.info(f"Scene projection: {backbone_out_dim} -> {self.d_model}")
         
         self.text_encoder = None  # Lazily initialized
         self.text_processor = TextConditionProcessor(
@@ -204,6 +215,13 @@ class DiTFM(nn.Module):
         
         # Initialize weights
         self._init_weights()
+
+        # Zero-init velocity head for stable FM training (ensures near-zero initial field)
+        if self.pred_mode == 'velocity' and hasattr(self, 'velocity_head'):
+            if hasattr(self.velocity_head, 'weight') and self.velocity_head.weight is not None:
+                nn.init.zeros_(self.velocity_head.weight)
+            if hasattr(self.velocity_head, 'bias') and self.velocity_head.bias is not None:
+                nn.init.zeros_(self.velocity_head.bias)
         
         self.logger.info(f"DiTFM initialized in pred_mode: {self.pred_mode}, "
                         f"continuous_time: {self.continuous_time}")
@@ -361,8 +379,12 @@ class DiTFM(nn.Module):
                     nn.init.zeros_(module.bias)
     
     def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
-        """Adjust backbone config based on input modalities."""
+        """
+        Adjust backbone config based on input modalities.
+        Supports PointNet2 and PTv3 backbones.
+        """
         import copy
+        from omegaconf import OmegaConf
         adjusted_cfg = copy.deepcopy(backbone_cfg)
         
         # Calculate feature input dimensions
@@ -375,6 +397,17 @@ class DiTFM(nn.Module):
                 mlp_list = list(adjusted_cfg.layer1.mlp_list)
                 mlp_list[0] = feature_input_dim
                 adjusted_cfg.layer1.mlp_list = mlp_list
+        elif backbone_name == 'ptv3':
+            # For PTv3: store feature dimension for validation/logging
+            # Actual feature handling is done dynamically in PTV3Backbone.forward
+            # Temporarily disable struct mode to add new field
+            OmegaConf.set_struct(adjusted_cfg, False)
+            adjusted_cfg.input_feature_dim = feature_input_dim
+            OmegaConf.set_struct(adjusted_cfg, True)
+            self.logger.debug(
+                f"PTv3 backbone configured: use_rgb={use_rgb}, "
+                f"use_object_mask={use_object_mask}, feature_dim={feature_input_dim}"
+            )
         
         return adjusted_cfg
     

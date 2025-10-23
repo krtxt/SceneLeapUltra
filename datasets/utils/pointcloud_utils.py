@@ -6,7 +6,7 @@ RGB color mapping, cropping, downsampling, and mask operations.
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -479,7 +479,7 @@ def sample_points_from_mesh_separated(
     table_faces: torch.Tensor,
     max_points: int,
     object_sampling_ratio: float,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Sample points from object and table meshes separately and merge them.
 
@@ -492,10 +492,14 @@ def sample_points_from_mesh_separated(
         object_sampling_ratio: Ratio of points dedicated to the object mesh
 
     Returns:
-        Sampled points (max_points, 3)
+        Tuple of:
+            Sampled points (max_points, 3)
+            Object mask indicating points sampled from the object mesh (max_points,)
     """
     if max_points <= 0:
-        return torch.zeros((0, 3), dtype=obj_verts.dtype, device=obj_verts.device)
+        empty_points = torch.zeros((0, 3), dtype=obj_verts.dtype, device=obj_verts.device)
+        empty_mask = torch.zeros((0,), dtype=torch.bool, device=obj_verts.device)
+        return empty_points, empty_mask
 
     device = obj_verts.device
     dtype = obj_verts.dtype
@@ -508,7 +512,8 @@ def sample_points_from_mesh_separated(
         from pytorch3d.ops import sample_points_from_meshes
         from pytorch3d.structures import Meshes
 
-        sampled_chunks = []
+        sampled_chunks: List[torch.Tensor] = []
+        mask_chunks: List[torch.Tensor] = []
 
         if num_obj_points > 0:
             if obj_verts.numel() > 0 and obj_faces.numel() > 0:
@@ -519,6 +524,7 @@ def sample_points_from_mesh_separated(
             else:
                 obj_points = torch.zeros((num_obj_points, 3), dtype=dtype, device=device)
             sampled_chunks.append(obj_points)
+            mask_chunks.append(torch.ones((obj_points.shape[0],), dtype=torch.bool, device=device))
 
         if num_table_points > 0:
             if table_verts.numel() > 0 and table_faces.numel() > 0:
@@ -529,27 +535,36 @@ def sample_points_from_mesh_separated(
             else:
                 table_points = torch.zeros((num_table_points, 3), dtype=dtype, device=device)
             sampled_chunks.append(table_points)
+            mask_chunks.append(torch.zeros((table_points.shape[0],), dtype=torch.bool, device=device))
 
         if not sampled_chunks:
-            return torch.zeros((max_points, 3), dtype=dtype, device=device)
+            zero_points = torch.zeros((max_points, 3), dtype=dtype, device=device)
+            zero_mask = torch.zeros((max_points,), dtype=torch.bool, device=device)
+            return zero_points, zero_mask
 
         combined_points = torch.cat(sampled_chunks, dim=0)
+        combined_mask = torch.cat(mask_chunks, dim=0) if mask_chunks else torch.zeros((combined_points.shape[0],), dtype=torch.bool, device=device)
 
         if combined_points.shape[0] != max_points:
             padding = torch.zeros(
                 (max_points - combined_points.shape[0], 3), dtype=dtype, device=device
             )
             combined_points = torch.cat([combined_points, padding], dim=0)
+            mask_padding = torch.zeros((padding.shape[0],), dtype=torch.bool, device=device)
+            combined_mask = torch.cat([combined_mask, mask_padding], dim=0)
 
         if combined_points.shape[0] > 0:
             perm = torch.randperm(combined_points.shape[0], device=device)
             combined_points = combined_points[perm]
+            combined_mask = combined_mask[perm]
 
-        return combined_points
+        return combined_points, combined_mask
 
     except Exception as exc:
         logging.warning(f"Failed to sample points from mesh: {exc}")
-        return torch.zeros((max_points, 3), dtype=dtype, device=device)
+        zero_points = torch.zeros((max_points, 3), dtype=dtype, device=device)
+        zero_mask = torch.zeros((max_points,), dtype=torch.bool, device=device)
+        return zero_points, zero_mask
 
 
 def downsample_point_cloud_with_mask(

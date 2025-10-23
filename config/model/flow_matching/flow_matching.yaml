@@ -14,11 +14,11 @@ batch_size: ${batch_size}
 # Flow Matching specific configuration
 fm:
   variant: rectified_flow  # rectified_flow | cfm | sfm
-  path: linear_ot  # linear_ot | diffusion_path
+  path: linear_ot  # linear_ot | vp | ve
   continuous_time: true
   
   # Time sampling strategy
-  t_sampler: cosine  # uniform | cosine | beta
+  t_sampler: uniform  # uniform | cosine | beta
   t_weight: null  # null | cosine | beta (for loss reweighting)
   
   # Noise distribution
@@ -54,6 +54,8 @@ guidance:
   method: clipped  # basic | clipped | rescaled | adaptive
   diff_clip: 5.0  # Norm clipping threshold for (v_cond - v_uncond)
   pc_correction: false  # Enable predictor-corrector refinement
+  dt_correction: 0.01  # Step size for predictor-corrector correction
+  num_corrections: 1  # Number of correction iterations
   
   # Adaptive CFG settings (when method=adaptive)
   early_steps_scale: 0.0  # Scale for early timesteps
@@ -63,7 +65,7 @@ guidance:
 # Optimizer configuration
 optimizer:
   name: adamw
-  lr: 0.0006
+  lr: 0.0004
   weight_decay: 0.001
 
 # Scheduler configuration

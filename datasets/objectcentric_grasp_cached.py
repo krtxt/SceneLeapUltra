@@ -209,7 +209,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
             "negative_prompts": [],
             "obj_verts": torch.zeros((0, 3), dtype=torch.float32),
             "obj_faces": torch.zeros((0, 3), dtype=torch.long),
-            "object_mask": torch.zeros((0,), dtype=torch.bool),
+            "object_mask": torch.zeros((self.max_points,), dtype=torch.bool),
             "obj_code": "unknown",
             "scene_id": "unknown",
             "category_id_from_object_index": 0,

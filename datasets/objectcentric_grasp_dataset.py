@@ -295,7 +295,7 @@ class ObjectCentricGraspDataset(Dataset):
                 self.table_size, table_device, table_dtype, table_z=0.0
             )
 
-            scene_pc_centered = sample_points_from_mesh_separated(
+            scene_pc_centered, object_mask = sample_points_from_mesh_separated(
                 obj_verts_centered,
                 obj_faces,
                 table_verts,
@@ -321,7 +321,7 @@ class ObjectCentricGraspDataset(Dataset):
                 "category_id_from_object_index": 0,
                 "positive_prompt": object_code,
                 "negative_prompts": [],
-                "object_mask": torch.zeros(0, dtype=torch.bool),
+                "object_mask": object_mask,
                 "is_exhaustive": item.get("is_exhaustive", False),
                 "chunk_idx": item.get("chunk_idx", 0),
                 "total_chunks": item.get("total_chunks", 1),
@@ -349,7 +349,7 @@ class ObjectCentricGraspDataset(Dataset):
             "category_id_from_object_index": 0,
             "positive_prompt": object_code,
             "negative_prompts": [],
-            "object_mask": torch.zeros(0, dtype=torch.bool),
+            "object_mask": torch.zeros((self.max_points,), dtype=torch.bool),
             "error": error_msg,
             "is_exhaustive": False,
             "chunk_idx": 0,
