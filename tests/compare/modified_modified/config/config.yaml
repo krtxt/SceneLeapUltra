@@ -1,0 +1,53 @@
+defaults:
+  - _self_
+  - model/diffuser@model: diffuser
+  # - model/flow_matching@model: flow_matching
+
+  - data_cfg: mini_sceneleapplus
+  # - data_cfg: objectcentric
+  # - data_cfg: mini_obj_centric
+  - distributed: default
+  - wandb: default
+
+epochs: 1000
+resume: false
+save_root: &save_root ./experiments/modified_modified
+save_top_n: 5
+seed: 42
+rot_type: &rot_type r6d
+mode: &mode camera_centric_scene_mean_normalized
+batch_size: &batch_size 40
+use_negative_prompts: &use_negative_prompts false
+target_num_grasps: &target_num_grasps 64
+fix_num_grasps: &fix_num_grasps true
+use_object_mask: &use_object_mask true
+use_text_condition: &use_text_condition false
+use_rgb: &use_rgb false
+exhaustive_sampling_strategy: &exhaustive_sampling_strategy interleaved
+
+checkpoint_path: ???
+
+trainer:
+  max_epochs: ${epochs}
+  accelerator: auto
+  devices: auto
+  strategy: auto
+  precision: 32
+  check_val_every_n_epoch: 5
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  benchmark: true
+  log_every_n_steps: 20
+  sync_batchnorm: false
+  find_unused_parameters: true
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false
+  hydra_logging:
+    version: 1
+    disable_existing_loggers: true
+  job_logging:
+    version: 1
+    disable_existing_loggers: true

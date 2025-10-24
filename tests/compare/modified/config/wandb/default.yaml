@@ -1,0 +1,30 @@
+enabled: false
+project: "scene-leap-ultra-diffusion-grasp"
+name: null
+group: null
+tags:
+  - "diffusion"
+  - "grasp-generation"
+  - "hand-pose"
+  - "scene-leap-ultra"
+notes: "Scene Leap Ultra diffusion model training for grasp generation"
+save_model: false
+monitor_system: false
+log_freq: 100
+log_only_main_process: true
+
+optimization:
+  enable_visualization: false
+  visualization_freq: 20
+  log_histograms: false
+  histogram_freq: 50
+  log_gradients: false
+  gradient_freq: 1000
+  system_freq: 500
+  monitor_system: false
+
+experiment:
+  auto_description: true
+  log_code_changes: false
+  log_environment: true
+  log_dataset_info: false

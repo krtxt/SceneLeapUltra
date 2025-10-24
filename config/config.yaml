@@ -2,18 +2,19 @@ defaults:
   - _self_
   - model/diffuser@model: diffuser
   # - data_cfg: sceneleapplus
-  - data_cfg: objectcentric
+  # - data_cfg: objectcentric
+  - data_cfg: mini_obj_centric
   - distributed: default
   - wandb: default
 
-epochs: 500
+epochs: 1000
 resume: false
-save_root: &save_root ./experiments/objcentric_new_pointnet2
+save_root: &save_root ./experiments/diffuser_objcentric_mini_pointnet2_moreepochs_retry
 save_top_n: 5
 seed: 42
 rot_type: &rot_type r6d
 mode: &mode camera_centric_scene_mean_normalized
-batch_size: &batch_size 96
+batch_size: &batch_size 16
 use_negative_prompts: &use_negative_prompts false
 target_num_grasps: &target_num_grasps 64
 fix_num_grasps: &fix_num_grasps true

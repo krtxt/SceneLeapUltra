@@ -3,6 +3,7 @@ experiments/
 assets/
 notebooks/
 outputs/
+bin/
 .idea/
 .kiro/
 .vscode/
@@ -12,3 +13,4 @@ assets/
 third_party/
 __pycache__/
 *.pyc
+*.ipynb

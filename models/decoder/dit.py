@@ -569,8 +569,10 @@ class DiTModel(nn.Module):
         self.scene_model = build_backbone(backbone_cfg)
         
         # Scene feature projection to match model dimension
-        # The backbone typically outputs 512-dim features, project to d_model
-        self.scene_projection = nn.Linear(512, self.d_model)
+        # Get backbone output dimension (PointNet2=512, PTv3_light=256, PTv3=512)
+        backbone_out_dim = getattr(self.scene_model, 'output_dim', 512)
+        self.scene_projection = nn.Linear(backbone_out_dim, self.d_model)
+        self.logger.info(f"Scene projection: {backbone_out_dim} -> {self.d_model}")
         
         self.text_encoder = None  # Lazily initialized
         self.text_processor = TextConditionProcessor(
@@ -599,7 +601,7 @@ class DiTModel(nn.Module):
     def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
         """
         Adjusts the backbone configuration based on use_rgb and use_object_mask settings.
-        Supports both PointNet2 and PTv3 backbones.
+        Supports PointNet2 and PTv3 backbones.
 
         Args:
             backbone_cfg: Original backbone configuration
@@ -612,13 +614,12 @@ class DiTModel(nn.Module):
         import copy
         adjusted_cfg = copy.deepcopy(backbone_cfg)
 
-        # Calculate total input dimension:
-        # - XYZ coordinates: 3 channels (handled automatically by PointNet2, explicitly by PTv3)
+        # Calculate feature input dimension:
+        # - XYZ coordinates: 3 channels (handled automatically by PointNet2 when use_xyz=True)
         # - RGB features: 3 channels (if use_rgb is True)
         # - Object mask (if enabled): +1 channel
         # Input order: xyz + rgb + object_mask
-        total_input_dim = 3 + (3 if use_rgb else 0) + (1 if use_object_mask else 0)
-        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)  # rgb + optional mask (for PointNet2)
+        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)  # rgb + optional mask
 
         backbone_name = getattr(adjusted_cfg, 'name', '').lower()
 
@@ -631,11 +632,17 @@ class DiTModel(nn.Module):
                 mlp_list = list(adjusted_cfg.layer1.mlp_list)
                 mlp_list[0] = feature_input_dim  # RGB (optional) + optional mask
                 adjusted_cfg.layer1.mlp_list = mlp_list
-
         elif backbone_name == 'ptv3':
-            # For PTv3: adjust the in_channels parameter
-            # PTv3 expects the total input dimension including xyz coordinates
-            adjusted_cfg.in_channels = total_input_dim  # xyz + rgb (optional) + optional mask
+            # For PTv3: store feature dimension for validation/logging
+            # Actual feature handling is done dynamically in PTV3Backbone.forward
+            from omegaconf import OmegaConf
+            OmegaConf.set_struct(adjusted_cfg, False)
+            adjusted_cfg.input_feature_dim = feature_input_dim
+            OmegaConf.set_struct(adjusted_cfg, True)
+            self.logger.debug(
+                f"PTv3 backbone configured: use_rgb={use_rgb}, "
+                f"use_object_mask={use_object_mask}, feature_dim={feature_input_dim}"
+            )
 
         return adjusted_cfg
     
