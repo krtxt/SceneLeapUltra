@@ -152,6 +152,7 @@ class PTV3Backbone(nn.Module):
         dec_channels = list(getattr(cfg, 'decoder_channels', [256, 128, 64, 32]))
         dec_depths = list(getattr(cfg, 'decoder_depths', [1, 2, 1, 1]))
         dec_patch_size = tuple(getattr(cfg, 'dec_patch_size', (1024, 1024, 1024, 1024)))
+        dec_num_head = tuple(getattr(cfg, 'dec_num_head', (4, 4, 8, 16)))
         
         # Note: PTv3 internally does: dec_channels = dec_channels + [enc_channels[-1]]
         # So final output will be enc_channels[-1] = 512
@@ -172,7 +173,7 @@ class PTV3Backbone(nn.Module):
                 enc_patch_size=enc_patch_size,
                 dec_depths=dec_depths,
                 dec_channels=dec_channels,
-                dec_num_head=(4, 4, 8, 16),
+                dec_num_head=dec_num_head,
                 dec_patch_size=dec_patch_size,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=True,

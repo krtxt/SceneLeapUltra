@@ -62,19 +62,31 @@ guidance:
   late_steps_scale: 1.0  # Scale for late timesteps
   transition_point: 0.5  # Transition point (0 to 1)
 
+# # Optimizer configuration
+# optimizer:
+#   name: adamw
+#   lr: 0.0004
+#   weight_decay: 0.001
+
+# # Scheduler configuration
+# scheduler:
+#   name: steplr
+#   t_max: 1000
+#   min_lr: 1.0e-05
+#   step_size: 100
+#   step_gamma: 0.5
 # Optimizer configuration
 optimizer:
   name: adamw
-  lr: 0.0004
+  lr: 0.0004           # 保持高初始LR，以实现快速收敛
   weight_decay: 0.001
 
 # Scheduler configuration
 scheduler:
-  name: steplr
-  t_max: 1000
-  min_lr: 1.0e-05
-  step_size: 100
-  step_gamma: 0.5
+  name: cosine           # <-- 关键改动：使用余弦退火
+  t_max: 1000            # <-- 设为总 epoch 数
+  min_lr: 1.0e-6         # <-- 衰减到的最低学习率
+  # (step_size 和 step_gamma 是 steplr 专用的，cosine不需要)
 
 # Debug and logging
 debug:

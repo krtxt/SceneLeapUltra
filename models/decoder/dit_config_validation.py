@@ -91,11 +91,12 @@ def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
     backbone_name = backbone_cfg.name.lower()
     validators = {
         'pointnet2': _validate_pointnet2_backbone,
+        'ptv3': _validate_ptv3_backbone,
     }
 
     if backbone_name not in validators:
         raise DiTConfigValidationError(
-            f"Unsupported backbone '{backbone_cfg.name}'. Supported backbone: 'pointnet2' (PTv3 已移除)"
+            f"Unsupported backbone '{backbone_cfg.name}'. Supported backbones: {list(validators.keys())}"
         )
 
     validators[backbone_name](backbone_cfg)
@@ -254,6 +255,135 @@ def _validate_pointnet2_backbone(backbone_cfg: DictConfig) -> None:
             values = _coerce_to_sequence(getattr(layer_cfg, param), f"{layer_prefix} {param}")
             if len(values) == 0:
                 raise DiTConfigValidationError(f"{layer_prefix} {param} must be non-empty")
+
+
+def _validate_ptv3_backbone(backbone_cfg: DictConfig) -> None:
+    """
+    Validate PTv3 backbone configuration.
+    
+    Args:
+        backbone_cfg: PTv3 backbone configuration object
+        
+    Raises:
+        DiTConfigValidationError: If PTv3 configuration is invalid
+    """
+    # Required parameters for PTv3
+    required_params = [
+        'variant', 'grid_size', 'encoder_channels', 'encoder_depths',
+        'encoder_num_head', 'enc_patch_size', 'decoder_channels',
+        'decoder_depths', 'dec_patch_size', 'mlp_ratio', 'out_dim'
+    ]
+    _require_attributes(backbone_cfg, required_params, prefix="PTv3 backbone")
+    
+    # Validate variant
+    valid_variants = {'light', 'base', 'no_flash'}
+    variant = getattr(backbone_cfg, 'variant', '').lower()
+    if variant not in valid_variants:
+        raise DiTConfigValidationError(
+            f"Invalid PTv3 variant '{variant}'. Must be one of {sorted(valid_variants)}"
+        )
+    
+    # Validate grid_size is positive
+    grid_size = getattr(backbone_cfg, 'grid_size', 0)
+    if grid_size <= 0:
+        raise DiTConfigValidationError(f"PTv3 grid_size ({grid_size}) must be positive")
+    
+    # Validate encoder_channels is a non-empty list
+    encoder_channels = _coerce_to_sequence(backbone_cfg.encoder_channels, "PTv3 encoder_channels", allow_scalar=False)
+    if len(encoder_channels) == 0:
+        raise DiTConfigValidationError("PTv3 encoder_channels must be non-empty")
+    if any(c <= 0 for c in encoder_channels):
+        raise DiTConfigValidationError("PTv3 encoder_channels must contain only positive values")
+    
+    # Validate encoder_depths matches encoder_channels length
+    encoder_depths = _coerce_to_sequence(backbone_cfg.encoder_depths, "PTv3 encoder_depths", allow_scalar=False)
+    if len(encoder_depths) != len(encoder_channels):
+        raise DiTConfigValidationError(
+            f"PTv3 encoder_depths length ({len(encoder_depths)}) must match "
+            f"encoder_channels length ({len(encoder_channels)})"
+        )
+    if any(d <= 0 for d in encoder_depths):
+        raise DiTConfigValidationError("PTv3 encoder_depths must contain only positive values")
+    
+    # Validate encoder_num_head matches encoder_channels length
+    encoder_num_head = _coerce_to_sequence(backbone_cfg.encoder_num_head, "PTv3 encoder_num_head", allow_scalar=False)
+    if len(encoder_num_head) != len(encoder_channels):
+        raise DiTConfigValidationError(
+            f"PTv3 encoder_num_head length ({len(encoder_num_head)}) must match "
+            f"encoder_channels length ({len(encoder_channels)})"
+        )
+    if any(h <= 0 for h in encoder_num_head):
+        raise DiTConfigValidationError("PTv3 encoder_num_head must contain only positive values")
+    
+    # Validate enc_patch_size matches encoder_channels length
+    enc_patch_size = _coerce_to_sequence(backbone_cfg.enc_patch_size, "PTv3 enc_patch_size", allow_scalar=False)
+    if len(enc_patch_size) != len(encoder_channels):
+        raise DiTConfigValidationError(
+            f"PTv3 enc_patch_size length ({len(enc_patch_size)}) must match "
+            f"encoder_channels length ({len(encoder_channels)})"
+        )
+    if any(p <= 0 for p in enc_patch_size):
+        raise DiTConfigValidationError("PTv3 enc_patch_size must contain only positive values")
+    
+    # Validate decoder_channels is non-empty
+    decoder_channels = _coerce_to_sequence(backbone_cfg.decoder_channels, "PTv3 decoder_channels", allow_scalar=False)
+    if len(decoder_channels) == 0:
+        raise DiTConfigValidationError("PTv3 decoder_channels must be non-empty")
+    if any(c <= 0 for c in decoder_channels):
+        raise DiTConfigValidationError("PTv3 decoder_channels must contain only positive values")
+    
+    # Validate decoder_depths matches decoder_channels length
+    decoder_depths = _coerce_to_sequence(backbone_cfg.decoder_depths, "PTv3 decoder_depths", allow_scalar=False)
+    if len(decoder_depths) != len(decoder_channels):
+        raise DiTConfigValidationError(
+            f"PTv3 decoder_depths length ({len(decoder_depths)}) must match "
+            f"decoder_channels length ({len(decoder_channels)})"
+        )
+    if any(d <= 0 for d in decoder_depths):
+        raise DiTConfigValidationError("PTv3 decoder_depths must contain only positive values")
+    
+    # Validate dec_patch_size matches decoder_channels length
+    dec_patch_size = _coerce_to_sequence(backbone_cfg.dec_patch_size, "PTv3 dec_patch_size", allow_scalar=False)
+    if len(dec_patch_size) != len(decoder_channels):
+        raise DiTConfigValidationError(
+            f"PTv3 dec_patch_size length ({len(dec_patch_size)}) must match "
+            f"decoder_channels length ({len(decoder_channels)})"
+        )
+    if any(p <= 0 for p in dec_patch_size):
+        raise DiTConfigValidationError("PTv3 dec_patch_size must contain only positive values")
+    
+    # Optional: validate dec_num_head if provided
+    if hasattr(backbone_cfg, 'dec_num_head'):
+        dec_num_head = _coerce_to_sequence(backbone_cfg.dec_num_head, "PTv3 dec_num_head", allow_scalar=False)
+        if len(dec_num_head) != len(decoder_channels):
+            raise DiTConfigValidationError(
+                f"PTv3 dec_num_head length ({len(dec_num_head)}) must match "
+                f"decoder_channels length ({len(decoder_channels)})"
+            )
+        if any(h <= 0 for h in dec_num_head):
+            raise DiTConfigValidationError("PTv3 dec_num_head must contain only positive values")
+
+    # Optional: validate input_feature_dim if provided
+    _ensure_optional_positive_int(backbone_cfg, 'input_feature_dim', 'PTv3 input_feature_dim')
+    
+    # Validate mlp_ratio is positive
+    mlp_ratio = getattr(backbone_cfg, 'mlp_ratio', 0)
+    if mlp_ratio <= 0:
+        raise DiTConfigValidationError(f"PTv3 mlp_ratio ({mlp_ratio}) must be positive")
+    
+    # Validate out_dim is positive
+    out_dim = getattr(backbone_cfg, 'out_dim', 0)
+    if out_dim <= 0:
+        raise DiTConfigValidationError(f"PTv3 out_dim ({out_dim}) must be positive")
+    
+    # Check that out_dim matches the last encoder channel (expected behavior)
+    if out_dim != encoder_channels[-1]:
+        logging.warning(
+            f"PTv3 out_dim ({out_dim}) does not match last encoder channel ({encoder_channels[-1]}). "
+            f"This may cause dimension mismatch issues."
+        )
+    
+    logging.debug(f"PTv3 backbone validation passed: variant={variant}, out_dim={out_dim}")
 
 
 def _ensure_optional_positive_int(cfg: Any, field: str, label: str) -> None:

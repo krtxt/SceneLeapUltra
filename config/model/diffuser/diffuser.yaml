@@ -42,6 +42,19 @@ scheduler:
   min_lr: 1.0e-05
   step_size: 100
   step_gamma: 0.5
+# # Optimizer configuration
+# optimizer:
+#   name: adamw
+#   lr: 0.0004           # 保持基础学习率
+#   weight_decay: 0.001
+
+# # Scheduler configuration
+# scheduler:
+#   name: steplr
+#   t_max: 1000
+#   min_lr: 1.0e-05
+#   step_size: 250         # <-- 关键改动：从100改为250
+#   step_gamma: 0.5          # <-- 保持衰减因子
 
 loss_type: l2
 out_sigmoid: false
