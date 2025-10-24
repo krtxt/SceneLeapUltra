@@ -3,6 +3,7 @@ experiments/
 assets/
 notebooks/
 outputs/
+bin/
 .idea/
 .kiro/
 .vscode/
