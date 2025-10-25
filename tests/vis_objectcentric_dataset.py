@@ -12,18 +12,21 @@ source ~/.bashrc && conda activate DexGrasp
 python scripts/vis_objectcentric_dataset.py
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import torch
-import numpy as np
-from torch.utils.data import DataLoader
-from datasets.objectcentric_grasp_dataset import ObjectCentricGraspDataset
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from omegaconf import OmegaConf
 import argparse
+
+import numpy as np
+import plotly.graph_objects as go
+import torch
+from omegaconf import OmegaConf
+from plotly.subplots import make_subplots
+from torch.utils.data import DataLoader
+
+from datasets.objectcentric_grasp_dataset import ObjectCentricGraspDataset
 
 
 def visualize_object_grasp(batch, batch_idx=0, show_mesh=True, show_grasp_positions=True,

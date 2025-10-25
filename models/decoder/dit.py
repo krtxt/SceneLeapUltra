@@ -12,7 +12,9 @@ from contextlib import nullcontext
 
 from models.utils.diffusion_utils import timestep_embedding
 from models.backbone import build_backbone
+from .dit_utils import adjust_backbone_config, init_weights
 from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
+from .dit_conditioning import ensure_text_encoder, prepare_text_features
 from .dit_config_validation import validate_dit_config, get_dit_config_summary
 from .dit_validation import (
     validate_dit_inputs, DiTValidationError, DiTInputError, DiTDimensionError,
@@ -307,19 +309,29 @@ class FeedForward(nn.Module):
 class DiTBlock(nn.Module):
     """
     DiT transformer block with self-attention, cross-attention, and feed-forward layers.
-    Enhanced with memory optimization features.
+    Enhanced with memory optimization features and mask support.
     """
     def __init__(self, d_model: int, num_heads: int, d_head: int, dropout: float = 0.1,
                  use_adaptive_norm: bool = True, time_embed_dim: Optional[int] = None,
-                 chunk_size: int = 512, use_flash_attention: bool = False):
+                 chunk_size: int = 512, use_flash_attention: bool = False,
+                 attention_dropout: float = 0.0, cross_attention_dropout: float = 0.0):
         super().__init__()
         self.d_model = d_model
         self.use_adaptive_norm = use_adaptive_norm
         
-        # Memory-efficient attention layers
-        self.self_attention = EfficientAttention(d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention)
-        self.scene_cross_attention = EfficientAttention(d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention)
-        self.text_cross_attention = EfficientAttention(d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention)
+        # Memory-efficient attention layers with dropout support
+        self.self_attention = EfficientAttention(
+            d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
+            attention_dropout=attention_dropout
+        )
+        self.scene_cross_attention = EfficientAttention(
+            d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
+            attention_dropout=cross_attention_dropout
+        )
+        self.text_cross_attention = EfficientAttention(
+            d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
+            attention_dropout=cross_attention_dropout
+        )
         
         # Feed-forward network
         self.feed_forward = FeedForward(d_model, dropout=dropout)
@@ -338,13 +350,15 @@ class DiTBlock(nn.Module):
     
     def forward(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
                 scene_context: Optional[torch.Tensor] = None,
-                text_context: Optional[torch.Tensor] = None) -> torch.Tensor:
+                text_context: Optional[torch.Tensor] = None,
+                scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             x: (B, num_grasps, d_model)
             time_emb: (B, time_embed_dim) or None
             scene_context: (B, N_points, d_model) or None
             text_context: (B, 1, d_model) or None
+            scene_mask: (B, N_points) or (B, 1, N_points) - mask for scene padding, 1=valid, 0=padding
         Returns:
             output: (B, num_grasps, d_model)
         """
@@ -380,7 +394,8 @@ class DiTBlock(nn.Module):
                 logging.error(f"[DiTBlock NaN] NaN after norm2")
                 raise RuntimeError("NaN detected in DiTBlock after norm2")
 
-            scene_attn_out = self.scene_cross_attention(norm_x, scene_context, scene_context)
+            # Pass scene_mask to prevent attention to padding positions
+            scene_attn_out = self.scene_cross_attention(norm_x, scene_context, scene_context, mask=scene_mask)
             if torch.isnan(scene_attn_out).any():
                 logging.error(f"[DiTBlock NaN] NaN after scene_cross_attention")
                 logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
@@ -503,6 +518,10 @@ class DiTModel(nn.Module):
         self.use_flash_attention = getattr(cfg, 'use_flash_attention', False)
         self.attention_chunk_size = getattr(cfg, 'attention_chunk_size', 512)
 
+        # Attention dropout config (for regularization)
+        self.attention_dropout = getattr(cfg, 'attention_dropout', 0.0)
+        self.cross_attention_dropout = getattr(cfg, 'cross_attention_dropout', 0.0)
+        
         # Memory monitoring config
         self.memory_monitoring = getattr(cfg, 'memory_monitoring', True)
 
@@ -549,7 +568,9 @@ class DiTModel(nn.Module):
                 use_adaptive_norm=self.use_adaptive_norm,
                 time_embed_dim=self.time_embed_dim if self.use_adaptive_norm else None,
                 chunk_size=self.attention_chunk_size,
-                use_flash_attention=self.use_flash_attention
+                use_flash_attention=self.use_flash_attention,
+                attention_dropout=self.attention_dropout,
+                cross_attention_dropout=self.cross_attention_dropout
             )
             
             # Wrap with gradient checkpointing if enabled
@@ -565,11 +586,11 @@ class DiTModel(nn.Module):
         
         # Conditioning modules (reuse from UNet)
         # Adjust backbone config based on use_rgb and use_object_mask
-        backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
+        backbone_cfg = adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
         self.scene_model = build_backbone(backbone_cfg)
         
         # Scene feature projection to match model dimension
-        # Get backbone output dimension (PointNet2=512, PTv3_light=256, PTv3=512)
+        # Get backbone output dimension (PointNet2=512, PTv3_light=512, PTv3=512)
         backbone_out_dim = getattr(self.scene_model, 'output_dim', 512)
         self.scene_projection = nn.Linear(backbone_out_dim, self.d_model)
         self.logger.info(f"Scene projection: {backbone_out_dim} -> {self.d_model}")
@@ -583,68 +604,8 @@ class DiTModel(nn.Module):
         )
         
         # Initialize weights
-        self._init_weights()
+        init_weights(self)
     
-    def _init_weights(self):
-        """Initialize model weights."""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.LayerNorm):
-                if module.weight is not None:
-                    nn.init.ones_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-    
-    def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
-        """
-        Adjusts the backbone configuration based on use_rgb and use_object_mask settings.
-        Supports PointNet2 and PTv3 backbones.
-
-        Args:
-            backbone_cfg: Original backbone configuration
-            use_rgb: Whether to use RGB features as input
-            use_object_mask: Whether to use object mask as additional input
-
-        Returns:
-            Modified backbone configuration with correct input dimensions
-        """
-        import copy
-        adjusted_cfg = copy.deepcopy(backbone_cfg)
-
-        # Calculate feature input dimension:
-        # - XYZ coordinates: 3 channels (handled automatically by PointNet2 when use_xyz=True)
-        # - RGB features: 3 channels (if use_rgb is True)
-        # - Object mask (if enabled): +1 channel
-        # Input order: xyz + rgb + object_mask
-        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)  # rgb + optional mask
-
-        backbone_name = getattr(adjusted_cfg, 'name', '').lower()
-
-        if backbone_name == 'pointnet2':
-            # For PointNet2: adjust the first layer's mlp_list first parameter
-            # PointNet2 automatically handles xyz coordinates when use_xyz=True
-            if (hasattr(adjusted_cfg, 'layer1') and
-                hasattr(adjusted_cfg.layer1, 'mlp_list') and
-                len(adjusted_cfg.layer1.mlp_list) > 0):
-                mlp_list = list(adjusted_cfg.layer1.mlp_list)
-                mlp_list[0] = feature_input_dim  # RGB (optional) + optional mask
-                adjusted_cfg.layer1.mlp_list = mlp_list
-        elif backbone_name == 'ptv3':
-            # For PTv3: store feature dimension for validation/logging
-            # Actual feature handling is done dynamically in PTV3Backbone.forward
-            from omegaconf import OmegaConf
-            OmegaConf.set_struct(adjusted_cfg, False)
-            adjusted_cfg.input_feature_dim = feature_input_dim
-            OmegaConf.set_struct(adjusted_cfg, True)
-            self.logger.debug(
-                f"PTv3 backbone configured: use_rgb={use_rgb}, "
-                f"use_object_mask={use_object_mask}, feature_dim={feature_input_dim}"
-            )
-
-        return adjusted_cfg
     
     def forward(self, x_t: torch.Tensor, ts: torch.Tensor, data: Dict) -> torch.Tensor:
         """
@@ -690,12 +651,22 @@ class DiTModel(nn.Module):
         grasp_tokens = self._tokenize_grasps(x_t)
         time_emb = self._embed_timesteps(ts)
         scene_context, text_context = self._resolve_condition_features(data, model_device)
+        
+        # Extract scene_mask if available
+        scene_mask = data.get("scene_mask", None)
+        if scene_mask is not None:
+            if not isinstance(scene_mask, torch.Tensor):
+                self.logger.warning(f"scene_mask is not a tensor ({type(scene_mask)}), ignoring")
+                scene_mask = None
+            elif scene_mask.device != model_device:
+                scene_mask = scene_mask.to(model_device)
 
         x = self._run_dit_blocks(
             grasp_tokens,
             time_emb if self.use_adaptive_norm else None,
             scene_context,
-            text_context
+            text_context,
+            scene_mask=scene_mask
         )
 
         output = self._finalize_output(x, single_grasp_mode)
@@ -795,6 +766,7 @@ class DiTModel(nn.Module):
         time_emb: Optional[torch.Tensor],
         scene_context: Optional[torch.Tensor],
         text_context: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = tokens
         for idx, block in enumerate(self.dit_blocks):
@@ -808,7 +780,8 @@ class DiTModel(nn.Module):
                     x=x,
                     time_emb=time_emb,
                     scene_context=scene_context,
-                    text_context=text_context
+                    text_context=text_context,
+                    scene_mask=scene_mask
                 )
                 self._assert_finite(x, f"DiT block {idx} output")
             except DiTConditioningError:
@@ -891,62 +864,20 @@ class DiTModel(nn.Module):
     def _prepare_text_features(self, data: Dict, scene_feat: torch.Tensor) -> Dict[str, Optional[torch.Tensor]]:
         self._ensure_text_encoder()
         batch_size = scene_feat.shape[0]
-
-        positive_prompts = data['positive_prompt']
-        if not isinstance(positive_prompts, (list, tuple)):
-            raise DiTConditioningError(f"positive_prompt must be list or tuple, got {type(positive_prompts)}")
-        if len(positive_prompts) != batch_size:
-            raise DiTConditioningError(
-                f"Batch size mismatch: scene features {batch_size}, prompts {len(positive_prompts)}"
-            )
-
-        self.logger.debug(f"[Text Conditioning] Encoding {batch_size} positive prompts...")
-        pos_text_features = self.text_encoder.encode_positive(positive_prompts)
-        self._assert_finite(pos_text_features, "pos_text_features")
-
-        neg_text_features: Optional[torch.Tensor] = None
-        if self.use_negative_prompts and data.get('negative_prompts') is not None:
-            try:
-                neg_text_features = self.text_encoder.encode_negative(data['negative_prompts'])
-                if self._has_non_finite(neg_text_features):
-                    self.logger.warning(
-                        "[Text Conditioning] Negative text features contain non-finite values, disabling negatives"
-                    )
-                    neg_text_features = None
-            except Exception as exc:
-                self.logger.warning(f"Negative prompt encoding failed: {exc}. Continuing without negative prompts.")
-                neg_text_features = None
-
         model_device = self._get_device()
-        text_mask = (
-            torch.bernoulli(
-                torch.full((batch_size, 1), 1.0 - self.text_dropout_prob, device=model_device)
-            )
-            if self.training else torch.ones(batch_size, 1, device=model_device)
-        )
-        self.logger.debug(
-            f"[Text Conditioning] text_mask sum: {text_mask.sum().item()}/{batch_size} "
-            f"(dropout_prob={self.text_dropout_prob})"
-        )
 
-        scene_embedding = torch.mean(scene_feat, dim=1)
-        self._assert_finite(scene_embedding, "scene_embedding")
-
-        pos_text_features_out, neg_pred = self.text_processor(
-            pos_text_features, neg_text_features, scene_embedding
+        result = prepare_text_features(
+            text_encoder=self.text_encoder,
+            text_processor=self.text_processor,
+            data=data,
+            scene_feat=scene_feat,
+            use_negative_prompts=self.use_negative_prompts,
+            text_dropout_prob=self.text_dropout_prob,
+            training=self.training,
+            device=model_device,
+            logger=self.logger,
         )
-        self._assert_finite(pos_text_features_out, "processed_text_features")
-
-        payload = {
-            "text_cond": pos_text_features_out * text_mask,
-            "text_mask": text_mask
-        }
-        if self.use_negative_prompts:
-            payload.update({
-                "neg_pred": neg_pred,
-                "neg_text_features": neg_text_features
-            })
-        return payload
+        return result
 
     def _replace_non_finite(self, tensor: torch.Tensor, name: str) -> torch.Tensor:
         if torch.isnan(tensor).any():
@@ -990,16 +921,8 @@ class DiTModel(nn.Module):
     def _ensure_text_encoder(self):
         """Initializes the text encoder on the correct device if it doesn't exist."""
         try:
-            if self.text_encoder is None:
-                device = self._get_device()
-                self.text_encoder = PosNegTextEncoder(device=device)
-                self.text_encoder.to(device)
-                self.logger.info(f"Text encoder lazily initialized on device: {device}")
-            else:
-                current_device = self._get_device()
-                if self.text_encoder.device != current_device:
-                    self.text_encoder.to(current_device)
-                    self.logger.info(f"Text encoder moved to device: {current_device}")
+            device = self._get_device()
+            self.text_encoder = ensure_text_encoder(self.text_encoder, device, logger=self.logger)
         except Exception as e:
             self.logger.error(f"Failed to initialize or move text encoder: {e}")
             raise DiTDeviceError(f"Text encoder device management failed: {e}")

@@ -3,7 +3,7 @@ import os
 import pathlib
 from collections import defaultdict
 from enum import Enum, auto
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import plotly.graph_objects as go
@@ -11,26 +11,20 @@ import pytorch_kinematics as pk
 import torch
 import transforms3d
 import trimesh as tm
-from typing import Tuple
 from urdf_parser_py.urdf import Box, Mesh, Robot, Sphere
 
+from utils.leap_hand_info import (LEAP_HAND_CONTACT_POINTS_PATH,
+                                  LEAP_HAND_DEFAULT_JOINT_ANGLES,
+                                  LEAP_HAND_DEFAULT_ORIENTATION,
+                                  LEAP_HAND_FINGERTIP_KEYWORDS,
+                                  LEAP_HAND_FINGERTIP_NAMES,
+                                  LEAP_HAND_JOINT_NAMES, LEAP_HAND_NUM_FINGERS,
+                                  LEAP_HAND_NUM_JOINTS,
+                                  LEAP_HAND_PENETRATION_POINTS_PATH,
+                                  LEAP_HAND_URDF_PATH)
 from utils.path_utils import get_assets_folder
-from utils.leap_hand_info import (
-    LEAP_HAND_CONTACT_POINTS_PATH,
-    LEAP_HAND_DEFAULT_JOINT_ANGLES,
-    LEAP_HAND_DEFAULT_ORIENTATION,
-    LEAP_HAND_FINGERTIP_KEYWORDS,
-    LEAP_HAND_FINGERTIP_NAMES,
-    LEAP_HAND_JOINT_NAMES,
-    LEAP_HAND_NUM_FINGERS,
-    LEAP_HAND_NUM_JOINTS,
-    LEAP_HAND_PENETRATION_POINTS_PATH,
-    LEAP_HAND_URDF_PATH,
-)
-from utils.rot6d import (
-    robust_compute_rotation_matrix_from_ortho6d,
-)
 from utils.point_utils import transform_points
+from utils.rot6d import robust_compute_rotation_matrix_from_ortho6d
 
 
 class HandModelType(Enum):
@@ -281,9 +275,9 @@ class HandModel:
             if "radius" not in self.mesh[link.name]:
                 try:
                     # Hide the import to avoid breaking the code if kaolin is not installed
-                    from kaolin.metrics.trianglemesh import (
-                        CUSTOM_index_vertices_by_faces as index_vertices_by_faces,
-                    )
+                    from kaolin.metrics.trianglemesh import \
+                        CUSTOM_index_vertices_by_faces as \
+                        index_vertices_by_faces
 
                     self.mesh[link.name]["face_verts"] = index_vertices_by_faces(
                         vertices, faces
@@ -645,9 +639,7 @@ class HandModel:
             x_local = x_local.reshape(-1, 3)  # (total_batch_size * num_samples, 3)
             if "radius" not in self.mesh[link_name]:
                 # Hide the import to avoid breaking the code if kaolin is not installed
-                from kaolin.metrics.trianglemesh import (
-                    compute_sdf,
-                )
+                from kaolin.metrics.trianglemesh import compute_sdf
 
                 assert (
                     "face_verts" in self.mesh[link_name]

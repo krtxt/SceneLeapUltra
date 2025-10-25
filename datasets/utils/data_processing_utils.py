@@ -5,163 +5,181 @@ This module provides utility functions for data processing operations
 including data index building, validation, and batch processing.
 """
 
-import os
 import json
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
-from typing import List, Dict, Any, Optional, Tuple
 
-from .transform_utils import (
-    transform_hand_poses_to_object_centric_frame,
-    revert_leap_qpos_static,
-    validate_hand_pose_data
-)
+from .transform_utils import (revert_leap_qpos_static,
+                              transform_hand_poses_to_object_centric_frame,
+                              validate_hand_pose_data)
 
 
 def build_data_index(
     scene_dirs: List[str],
     collision_free_grasp_info: Dict[str, List],
     hand_pose_data: Dict[str, Dict],
-    max_grasps_per_object: Optional[int] = None
+    max_grasps_per_object: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Build data index for dataset iteration.
-    
+
     Args:
         scene_dirs: List of scene directory paths
         collision_free_grasp_info: Dictionary of collision-free grasp information
         hand_pose_data: Dictionary of hand pose data
         max_grasps_per_object: Maximum number of grasps per object
-        
+
     Returns:
         List of data index entries
     """
     data_index = []
-    
+
     for scene_dir_path_local in scene_dirs:
         scene_id = os.path.basename(scene_dir_path_local)
         current_scene_collision_info = collision_free_grasp_info.get(scene_id, [])
-        
+
         # Get available depth view indices
         depth_view_indices = get_depth_view_indices_from_scene(scene_dir_path_local)
         if not depth_view_indices:
             continue
-        
+
         for obj_grasp_entry in current_scene_collision_info:
-            obj_name = obj_grasp_entry.get('object_name')
-            obj_uid = obj_grasp_entry.get('uid')
-            category_id_for_masking = obj_grasp_entry.get('object_index')
-            
+            obj_name = obj_grasp_entry.get("object_name")
+            obj_uid = obj_grasp_entry.get("uid")
+            category_id_for_masking = obj_grasp_entry.get("object_index")
+
             if not obj_name or not obj_uid or category_id_for_masking is None:
                 continue
-                
+
             object_code = f"{obj_name}_{obj_uid}"
             if hand_pose_data.get(scene_id, {}).get(object_code) is None:
                 continue
-            
-            collision_free_indices_for_obj = obj_grasp_entry.get('collision_free_indices', [])
+
+            collision_free_indices_for_obj = obj_grasp_entry.get(
+                "collision_free_indices", []
+            )
             if not collision_free_indices_for_obj:
                 continue
-            
+
             # Limit grasps per object if specified
-            if max_grasps_per_object is not None and len(collision_free_indices_for_obj) > max_grasps_per_object:
-                collision_free_indices_for_obj = collision_free_indices_for_obj[:max_grasps_per_object]
-            
+            if (
+                max_grasps_per_object is not None
+                and len(collision_free_indices_for_obj) > max_grasps_per_object
+            ):
+                collision_free_indices_for_obj = collision_free_indices_for_obj[
+                    :max_grasps_per_object
+                ]
+
             # Add entries for all combinations of grasps and views
             for grasp_npy_idx in collision_free_indices_for_obj:
                 for depth_view_idx in depth_view_indices:
-                    data_index.append({
-                        'scene_id': scene_id,
-                        'object_code': object_code,
-                        'category_id_for_masking': category_id_for_masking,
-                        'depth_view_index': depth_view_idx,
-                        'grasp_npy_idx': grasp_npy_idx
-                    })
-    
+                    data_index.append(
+                        {
+                            "scene_id": scene_id,
+                            "object_code": object_code,
+                            "category_id_for_masking": category_id_for_masking,
+                            "depth_view_index": depth_view_idx,
+                            "grasp_npy_idx": grasp_npy_idx,
+                        }
+                    )
+
     if not data_index:
         print("Warning: SceneLeapDataset data_index is empty after build.")
-    
+
     return data_index
 
 
 def get_depth_view_indices_from_scene(scene_dir_path: str) -> List[int]:
     """
     Get depth view indices from scene directory.
-    
+
     Args:
         scene_dir_path: Path to scene directory
-        
+
     Returns:
         List of depth view indices
     """
     depth_view_indices = []
-    depth_dir_for_scan = os.path.join(scene_dir_path, 'train_pbr/000000/depth/')
-    
+    depth_dir_for_scan = os.path.join(scene_dir_path, "train_pbr/000000/depth/")
+
     if os.path.exists(depth_dir_for_scan) and os.path.isdir(depth_dir_for_scan):
         for f_name in sorted(os.listdir(depth_dir_for_scan)):
-            if f_name.endswith('.png'):
+            if f_name.endswith(".png"):
                 try:
                     depth_view_indices.append(int(os.path.splitext(f_name)[0]))
                 except ValueError:
                     pass
-    
+
     return depth_view_indices
 
 
 def load_and_process_hand_pose_data(
     scene_dirs: List[str],
     collision_free_grasp_info: Dict[str, List],
-    succ_grasp_dir: str
+    succ_grasp_dir: str,
 ) -> Dict[str, Dict[str, torch.Tensor]]:
     """
     Load and process hand pose data for all scenes.
-    
+
     Args:
         scene_dirs: List of scene directory paths
         collision_free_grasp_info: Dictionary of collision-free grasp information
         succ_grasp_dir: Directory containing successful grasp data
-        
+
     Returns:
         Dictionary of processed hand pose data
     """
     hand_pose_data = {}
-    
+
     for scene_dir_path in scene_dirs:
         scene_id = os.path.basename(scene_dir_path)
         hand_pose_data[scene_id] = {}
-        
+
         for obj_info in collision_free_grasp_info.get(scene_id, []):
             obj_code = f"{obj_info['object_name']}_{obj_info['uid']}"
             hand_pose_path = os.path.join(succ_grasp_dir, f"{obj_code}.npy")
-            
+
             if os.path.exists(hand_pose_path):
                 try:
                     grasp_data_dict = np.load(hand_pose_path, allow_pickle=True).item()
-                    raw_qpos_in_grasp_world_np = grasp_data_dict.get('grasp_qpos')
-                    obj_pose_7d_np = grasp_data_dict.get('obj_pose')
-                    
-                    if validate_hand_pose_data(raw_qpos_in_grasp_world_np, obj_pose_7d_np):
-                        qpos_gw_tensor = torch.from_numpy(raw_qpos_in_grasp_world_np.astype(np.float32))
-                        obj_pose_tensor = torch.from_numpy(obj_pose_7d_np.astype(np.float32))
-                        
-                        qpos_object_centric_tensor = transform_hand_poses_to_object_centric_frame(
-                            qpos_gw_tensor, obj_pose_tensor
+                    raw_qpos_in_grasp_world_np = grasp_data_dict.get("grasp_qpos")
+                    obj_pose_7d_np = grasp_data_dict.get("obj_pose")
+
+                    if validate_hand_pose_data(
+                        raw_qpos_in_grasp_world_np, obj_pose_7d_np
+                    ):
+                        qpos_gw_tensor = torch.from_numpy(
+                            raw_qpos_in_grasp_world_np.astype(np.float32)
                         )
-                        reverted_qpos = revert_leap_qpos_static(qpos_object_centric_tensor)
+                        obj_pose_tensor = torch.from_numpy(
+                            obj_pose_7d_np.astype(np.float32)
+                        )
+
+                        qpos_object_centric_tensor = (
+                            transform_hand_poses_to_object_centric_frame(
+                                qpos_gw_tensor, obj_pose_tensor
+                            )
+                        )
+                        reverted_qpos = revert_leap_qpos_static(
+                            qpos_object_centric_tensor
+                        )
                         hand_pose_data[scene_id][obj_code] = reverted_qpos
                     else:
                         hand_pose_data[scene_id][obj_code] = None
-                        
+
                 except Exception as e:
                     hand_pose_data[scene_id][obj_code] = None
             else:
                 hand_pose_data[scene_id][obj_code] = None
-    
+
     return hand_pose_data
 
 
 def load_objectcentric_hand_pose_data(
-    succ_grasp_dir: str
+    succ_grasp_dir: str,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """
     Load grasp poses and object poses for object-centric datasets.
@@ -176,7 +194,9 @@ def load_objectcentric_hand_pose_data(
     obj_pose_data: Dict[str, torch.Tensor] = {}
 
     if not os.path.exists(succ_grasp_dir):
-        raise FileNotFoundError(f"Successful grasp directory not found: {succ_grasp_dir}")
+        raise FileNotFoundError(
+            f"Successful grasp directory not found: {succ_grasp_dir}"
+        )
 
     npy_files = [f for f in os.listdir(succ_grasp_dir) if f.endswith(".npy")]
     if not npy_files:
@@ -194,7 +214,9 @@ def load_objectcentric_hand_pose_data(
             if not validate_hand_pose_data(raw_qpos_in_grasp_world_np, obj_pose_7d_np):
                 continue
 
-            qpos_gw_tensor = torch.from_numpy(raw_qpos_in_grasp_world_np.astype(np.float32))
+            qpos_gw_tensor = torch.from_numpy(
+                raw_qpos_in_grasp_world_np.astype(np.float32)
+            )
             obj_pose_tensor = torch.from_numpy(obj_pose_7d_np.astype(np.float32))
             reverted_qpos = revert_leap_qpos_static(qpos_gw_tensor)
 
@@ -212,59 +234,62 @@ def load_objectcentric_hand_pose_data(
 def load_scene_metadata(scene_dirs: List[str]) -> Tuple[Dict, Dict, Dict]:
     """
     Load scene metadata including instance maps, scene ground truth, and collision info.
-    
+
     Args:
         scene_dirs: List of scene directory paths
-        
+
     Returns:
         Tuple of (instance_maps, scene_gt, collision_free_grasp_info)
     """
     instance_maps = {}
     scene_gt = {}
     collision_free_grasp_info = {}
-    
+
     for scene_dir_path in scene_dirs:
         scene_id = os.path.basename(scene_dir_path)
-        
+
         # Load instance attribute maps
-        instance_map_path = os.path.join(scene_dir_path, 'instance_attribute_maps.json')
+        instance_map_path = os.path.join(scene_dir_path, "instance_attribute_maps.json")
         if os.path.exists(instance_map_path):
-            instance_maps[scene_id] = json.load(open(instance_map_path, 'r'))
+            instance_maps[scene_id] = json.load(open(instance_map_path, "r"))
         else:
             instance_maps[scene_id] = {}
-        
+
         # Load scene ground truth
-        scene_gt_path = os.path.join(scene_dir_path, 'train_pbr/000000', 'scene_gt.json')
+        scene_gt_path = os.path.join(
+            scene_dir_path, "train_pbr/000000", "scene_gt.json"
+        )
         if os.path.exists(scene_gt_path):
-            scene_gt[scene_id] = json.load(open(scene_gt_path, 'r'))
+            scene_gt[scene_id] = json.load(open(scene_gt_path, "r"))
         else:
             scene_gt[scene_id] = {}
-        
+
         # Load collision-free grasp information
-        collision_free_grasp_path = os.path.join(scene_dir_path, 'collision_free_grasp_indices.json')
+        collision_free_grasp_path = os.path.join(
+            scene_dir_path, "collision_free_grasp_indices.json"
+        )
         if os.path.exists(collision_free_grasp_path):
-            collision_free_grasp_info[scene_id] = json.load(open(collision_free_grasp_path, 'r'))
+            collision_free_grasp_info[scene_id] = json.load(
+                open(collision_free_grasp_path, "r")
+            )
         else:
             collision_free_grasp_info[scene_id] = []
-    
+
     return instance_maps, scene_gt, collision_free_grasp_info
 
 
 def validate_dataset_configuration(
-    root_dir: str,
-    succ_grasp_dir: str,
-    obj_root_dir: str,
-    mode: str
+    root_dir: str, succ_grasp_dir: str, obj_root_dir: str, mode: str
 ) -> bool:
     """
     Validate dataset configuration parameters.
-    
+
     Args:
         root_dir: Root directory path
         succ_grasp_dir: Successful grasp directory path
         obj_root_dir: Object root directory path
         mode: Coordinate system mode
-        
+
     Returns:
         True if configuration is valid, False otherwise
     """
@@ -272,37 +297,42 @@ def validate_dataset_configuration(
     if not os.path.exists(root_dir):
         print(f"Error: Root directory does not exist: {root_dir}")
         return False
-    
+
     if not os.path.exists(succ_grasp_dir):
         print(f"Error: Successful grasp directory does not exist: {succ_grasp_dir}")
         return False
-    
+
     if not os.path.exists(obj_root_dir):
         print(f"Error: Object root directory does not exist: {obj_root_dir}")
         return False
-    
+
     # Validate mode
-    valid_modes = ["object_centric", "camera_centric", "camera_centric_obj_mean_normalized", "camera_centric_scene_mean_normalized"]
+    valid_modes = [
+        "object_centric",
+        "camera_centric",
+        "camera_centric_obj_mean_normalized",
+        "camera_centric_scene_mean_normalized",
+    ]
     if mode not in valid_modes:
         print(f"Error: Invalid mode '{mode}'. Must be one of {valid_modes}")
         return False
-    
+
     return True
 
 
 def collate_batch_data(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Collate batch data for DataLoader.
-    
+
     Args:
         batch: List of sample dictionaries
-        
+
     Returns:
         Collated batch dictionary
     """
     if not batch:
         return {}
-    
+
     input_dict = {}
     for k in batch[0]:
         if isinstance(batch[0][k], torch.Tensor):
@@ -310,13 +340,11 @@ def collate_batch_data(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
                 input_dict[k] = torch.stack([sample[k] for sample in batch])
             except RuntimeError:
                 input_dict[k] = torch.nn.utils.rnn.pad_sequence(
-                    [sample[k] for sample in batch],
-                    batch_first=True,
-                    padding_value=0
+                    [sample[k] for sample in batch], batch_first=True, padding_value=0
                 )
         else:
             input_dict[k] = [sample[k] for sample in batch]
-    
+
     return input_dict
 
 
@@ -344,7 +372,7 @@ def collate_variable_grasps_batch(batch: List[Dict[str, Any]]) -> Dict[str, Any]
 
     # Determine fallback dtype and device from the batch
     fallback_dtype = torch.float32
-    fallback_device = 'cpu'
+    fallback_device = "cpu"
 
     for item_dict in batch:
         found_ref = False
@@ -367,29 +395,39 @@ def collate_variable_grasps_batch(batch: List[Dict[str, Any]]) -> Dict[str, Any]
     for key in all_keys:
         current_key_items = [item_dict.get(key) for item_dict in batch]
 
-        if key == 'hand_model_pose':  # Target: (batch_size, max_N, 23)
+        if key == "hand_model_pose":  # Target: (batch_size, max_N, 23)
             collated_output[key] = _collate_hand_model_pose(
                 current_key_items, fallback_dtype, fallback_device, len(batch)
             )
-        elif key == 'se3':  # Target: (batch_size, max_N, 4, 4)
+        elif key == "se3":  # Target: (batch_size, max_N, 4, 4)
             collated_output[key] = _collate_se3_matrices(
                 current_key_items, fallback_dtype, fallback_device, len(batch)
             )
-        elif key in ['object_mask', 'obj_verts', 'obj_faces', 'positive_prompt', 'negative_prompts', 'error']:
+        elif key in [
+            "object_mask",
+            "obj_verts",
+            "obj_faces",
+            "positive_prompt",
+            "negative_prompts",
+            "error",
+        ]:
             # Keep these as lists
             collated_output[key] = current_key_items
         else:
             # Default collation for other keys
             try:
-                collated_output[key] = torch.utils.data.dataloader.default_collate(current_key_items)
+                collated_output[key] = torch.utils.data.dataloader.default_collate(
+                    current_key_items
+                )
             except (RuntimeError, TypeError, AttributeError):
                 collated_output[key] = current_key_items  # Fallback to list
 
     return collated_output
 
 
-def _collate_hand_model_pose(items: List[Any], fallback_dtype: torch.dtype,
-                           fallback_device: str, batch_size: int) -> torch.Tensor:
+def _collate_hand_model_pose(
+    items: List[Any], fallback_dtype: torch.dtype, fallback_device: str, batch_size: int
+) -> torch.Tensor:
     """
     Collate hand_model_pose tensors with padding.
 
@@ -422,21 +460,30 @@ def _collate_hand_model_pose(items: List[Any], fallback_dtype: torch.dtype,
                 padded_tensors.append(t)
             else:  # num_grasps < max_n
                 padding_size = max_n - num_grasps
-                padding = torch.zeros((padding_size, 23), dtype=item_dtype, device=item_device)
+                padding = torch.zeros(
+                    (padding_size, 23), dtype=item_dtype, device=item_device
+                )
                 padded_tensors.append(torch.cat([t, padding], dim=0))
         else:  # t is None, or not a tensor, or wrong shape. Pad to max_n.
-            padded_tensors.append(torch.zeros((max_n, 23), dtype=item_dtype, device=item_device))
+            padded_tensors.append(
+                torch.zeros((max_n, 23), dtype=item_dtype, device=item_device)
+            )
 
     if padded_tensors:
         return torch.stack(padded_tensors)
-    elif batch_size > 0:  # Only if batch was non-empty but all items resulted in no tensors for max_n=0
-        return torch.empty((batch_size, 0, 23), dtype=fallback_dtype, device=fallback_device)
+    elif (
+        batch_size > 0
+    ):  # Only if batch was non-empty but all items resulted in no tensors for max_n=0
+        return torch.empty(
+            (batch_size, 0, 23), dtype=fallback_dtype, device=fallback_device
+        )
     else:  # batch is empty
         return torch.empty(0)
 
 
-def _collate_se3_matrices(items: List[Any], fallback_dtype: torch.dtype,
-                        fallback_device: str, batch_size: int) -> torch.Tensor:
+def _collate_se3_matrices(
+    items: List[Any], fallback_dtype: torch.dtype, fallback_device: str, batch_size: int
+) -> torch.Tensor:
     """
     Collate SE3 matrices with padding.
 
@@ -469,14 +516,20 @@ def _collate_se3_matrices(items: List[Any], fallback_dtype: torch.dtype,
                 padded_tensors.append(t)
             else:  # num_grasps < max_n
                 padding_size = max_n - num_grasps
-                padding = torch.zeros((padding_size, 4, 4), dtype=item_dtype, device=item_device)
+                padding = torch.zeros(
+                    (padding_size, 4, 4), dtype=item_dtype, device=item_device
+                )
                 padded_tensors.append(torch.cat([t, padding], dim=0))
         else:  # t is None, or not a tensor, or wrong shape. Pad to max_n.
-            padded_tensors.append(torch.zeros((max_n, 4, 4), dtype=item_dtype, device=item_device))
+            padded_tensors.append(
+                torch.zeros((max_n, 4, 4), dtype=item_dtype, device=item_device)
+            )
 
     if padded_tensors:
         return torch.stack(padded_tensors)
     elif batch_size > 0:
-        return torch.empty((batch_size, 0, 4, 4), dtype=fallback_dtype, device=fallback_device)
+        return torch.empty(
+            (batch_size, 0, 4, 4), dtype=fallback_dtype, device=fallback_device
+        )
     else:  # batch is empty
         return torch.empty(0)

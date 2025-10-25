@@ -6,9 +6,11 @@ allowing different transformation modes to be handled in a clean, extensible way
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 import torch
+
 from .dataset_config import CONFIG
 
 

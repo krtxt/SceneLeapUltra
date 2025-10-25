@@ -3,11 +3,13 @@
 可视化代码差异的关键指标
 """
 
-import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.pyplot as plt
+
 matplotlib.use('Agg')  # 非GUI后端
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 # 设置中文字体
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'sans-serif']

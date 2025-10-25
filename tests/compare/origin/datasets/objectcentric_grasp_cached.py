@@ -16,12 +16,8 @@ from .objectcentric_grasp_dataset import ObjectCentricGraspDataset
 from .utils.cache_utils import CacheManager
 from .utils.constants import STANDARD_CACHE_KEYS
 from .utils.dataset_config import CachedDatasetConfig
-from .utils.distributed_utils import (
-    distributed_barrier,
-    get_rank_info,
-    is_distributed_training,
-    is_main_process,
-)
+from .utils.distributed_utils import (distributed_barrier, get_rank_info,
+                                      is_distributed_training, is_main_process)
 
 
 class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):

@@ -1,17 +1,11 @@
-import json
 import logging
-import os
 import pathlib
 from collections import defaultdict
-from enum import Enum, auto
-from typing import Optional, Union, Dict, List, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
-import plotly.graph_objects as go
-import pytorch_kinematics as pk
 import torch
 import trimesh as tm
-from torchsdf import index_vertices_by_faces, compute_sdf
 
 # Define slice constants for pose components
 TRANSLATION_SLICE = slice(0, 3)
@@ -21,15 +15,15 @@ ROTATION_SLICE = slice(19, None)
 # Attempt to import PyTorch3D for specific functionalities
 try:
     from pytorch3d.ops import knn_points
-    from pytorch3d.structures import Meshes as PyTorch3DMeshes
-    from pytorch3d.ops import sample_points_from_meshes as pytorch3d_sample_points_from_meshes
-    from pytorch3d.ops import sample_farthest_points as pytorch3d_sample_farthest_points
+
     _PYTORCH3D_AVAILABLE = True
 except ImportError:
     _PYTORCH3D_AVAILABLE = False
-    # Define dummy functions or raise errors if PyTorch3D is critical for some operations
-    # For now, methods requiring these will check _PYTORCH3D_AVAILABLE
 
+from utils.hand_loader import HandLoader
+from utils.hand_physics import HandPhysics
+from utils.hand_types import HandModelType
+from utils.hand_visualizer import HandVisualizer
 from utils.leap_hand_info import (
     LEAP_HAND_CONTACT_POINTS_PATH,
     LEAP_HAND_DEFAULT_JOINT_ANGLES,
@@ -42,15 +36,6 @@ from utils.leap_hand_info import (
     LEAP_HAND_PENETRATION_POINTS_PATH,
     LEAP_HAND_URDF_PATH,
 )
-from utils.rot6d import (
-    robust_compute_rotation_matrix_from_ortho6d,
-)
-from utils.point_utils import transform_points
-from utils.hand_loader import HandLoader
-from utils.hand_physics import HandPhysics
-from utils.hand_visualizer import HandVisualizer
-from utils.hand_types import HandModelType
-
 
 SELF_PENETRATION_POINT_RADIUS = 0.01
 
@@ -79,7 +64,7 @@ class HandStateManager:
         hand_pose_original: torch.Tensor,
         hand_pose_flat: torch.Tensor,
         global_translation: torch.Tensor,
-        global_rotation: torch.Tensor
+        global_rotation: torch.Tensor,
     ) -> None:
         """Set pose-related state variables."""
         self.hand_pose_original = hand_pose_original
@@ -99,7 +84,7 @@ class HandStateManager:
     def set_contact_state(
         self,
         contact_point_indices: Optional[torch.Tensor],
-        contact_points: Optional[torch.Tensor]
+        contact_points: Optional[torch.Tensor],
     ) -> None:
         """Set contact-related state."""
         self.contact_point_indices = contact_point_indices
@@ -125,86 +110,12 @@ class HandStateManager:
     @property
     def is_initialized(self) -> bool:
         """Check if state is properly initialized."""
-        return (self.hand_pose is not None and
-                self.global_translation is not None and
-                self.global_rotation is not None and
-                self.current_status is not None)
-
-
-class HandStateManager:
-    """Manages hand pose state and related transformations."""
-
-    def __init__(self, device: Union[str, torch.device]):
-        self.device = device
-        self.reset()
-
-    def reset(self) -> None:
-        """Reset all state variables."""
-        self.hand_pose = None
-        self.hand_pose_original = None
-        self.contact_point_indices = None
-        self.global_translation = None
-        self.global_rotation = None
-        self.current_status = None
-        self.contact_points = None
-        self.batch_size_original = None
-        self.num_grasps = None
-
-    def set_pose_state(
-        self,
-        hand_pose_original: torch.Tensor,
-        hand_pose_flat: torch.Tensor,
-        global_translation: torch.Tensor,
-        global_rotation: torch.Tensor
-    ) -> None:
-        """Set pose-related state variables."""
-        self.hand_pose_original = hand_pose_original
-        self.hand_pose = hand_pose_flat
-        self.global_translation = global_translation
-        self.global_rotation = global_rotation
-        self.batch_size_original = hand_pose_original.shape[0]
-        self.num_grasps = hand_pose_original.shape[1]
-
-        if self.hand_pose.requires_grad:
-            self.hand_pose.retain_grad()
-
-    def set_kinematics_state(self, current_status) -> None:
-        """Set forward kinematics state."""
-        self.current_status = current_status
-
-    def set_contact_state(
-        self,
-        contact_point_indices: Optional[torch.Tensor],
-        contact_points: Optional[torch.Tensor]
-    ) -> None:
-        """Set contact-related state."""
-        self.contact_point_indices = contact_point_indices
-        self.contact_points = contact_points
-
-    def get_flattened_global_transforms(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get flattened global transforms for multi-grasp processing."""
-        if self.global_rotation is None or self.global_translation is None:
-            raise ValueError("Global transforms not set. Call set_pose_state first.")
-
-        # Flatten first two dimensions: [B, num_grasps, ...] -> [B*num_grasps, ...]
-        global_rotation_flat = self.global_rotation.view(-1, 3, 3)
-        global_translation_flat = self.global_translation.view(-1, 3)
-        return global_rotation_flat, global_translation_flat
-
-    @property
-    def batch_size_flat(self) -> int:
-        """Get flattened batch size (B * num_grasps)."""
-        if self.hand_pose is None:
-            raise ValueError("Hand pose not set.")
-        return self.hand_pose.shape[0]
-
-    @property
-    def is_initialized(self) -> bool:
-        """Check if state is properly initialized."""
-        return (self.hand_pose is not None and
-                self.global_translation is not None and
-                self.global_rotation is not None and
-                self.current_status is not None)
+        return (
+            self.hand_pose is not None
+            and self.global_translation is not None
+            and self.global_rotation is not None
+            and self.current_status is not None
+        )
 
 
 class HandModel:
@@ -225,7 +136,7 @@ class HandModel:
         self.logger = logging.getLogger(self.__class__.__name__)
         if not self.logger.handlers:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+            formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.WARNING)
@@ -331,7 +242,10 @@ class HandModel:
         ✅ MIGRATED: This method has been migrated to HandPhysics.
         This is now a proxy to the HandPhysics implementation.
         """
-        return self.physics.sample_contact_points(total_batch_size, n_contacts_per_finger)
+        return self.physics.sample_contact_points(
+            total_batch_size, n_contacts_per_finger
+        )
+
     def set_parameters(
         self,
         hand_pose: torch.Tensor,
@@ -356,20 +270,22 @@ class HandModel:
             A concatenated tensor containing translation, joint angles, and rotation parameters.
             The order is: translation, then joint angles, then rotation parameters.
             For backward compatibility, (B, pose_dim) is also accepted and treated as (B, 1, pose_dim).
-        contact_point_indices: (B, `n_contact`) [Optional] torch.LongTensor
-            Indices of contact candidates.
+        contact_point_indices: (B_flat, `n_contact`) [Optional] torch.LongTensor
+            Indices of contact candidates in flattened batch format (B_flat = B * num_grasps).
         """
         # Step 1: Normalize input format
         hand_pose = self._normalize_hand_pose(hand_pose)
 
         # Step 2: Validate and decompose pose
-        global_translation_flat, global_rotation_flat, joint_angles = self._validate_and_decompose_pose(hand_pose)
+        global_translation_flat, global_rotation_flat, joint_angles = (
+            self._validate_and_decompose_pose(hand_pose)
+        )
 
         # Step 3: Compute forward kinematics
         self._compute_forward_kinematics(joint_angles)
 
         # Step 4: Process contact points
-        self._process_contact_points(contact_point_indices, global_translation_flat, global_rotation_flat)
+        self._process_contact_points(contact_point_indices)
 
     def _normalize_hand_pose(self, hand_pose: torch.Tensor) -> torch.Tensor:
         """
@@ -392,14 +308,20 @@ class HandModel:
             # [B, num_grasps, pose_dim] - already in expected format
             pass
         else:
-            raise ValueError(f"hand_pose must be 1D, 2D or 3D tensor, got {hand_pose.dim()}D tensor with shape {hand_pose.shape}")
+            raise ValueError(
+                f"hand_pose must be 1D, 2D or 3D tensor, got {hand_pose.dim()}D tensor with shape {hand_pose.shape}"
+            )
 
         # Unified multi-grasp format processing
-        assert hand_pose.dim() == 3, f"Internal error: hand_pose should be 3D after normalization, got {hand_pose.dim()}D"
+        assert (
+            hand_pose.dim() == 3
+        ), f"Internal error: hand_pose should be 3D after normalization, got {hand_pose.dim()}D"
 
         return hand_pose
 
-    def _validate_and_decompose_pose(self, hand_pose: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _validate_and_decompose_pose(
+        self, hand_pose: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Validate pose dimensions and decompose into components.
 
@@ -410,60 +332,78 @@ class HandModel:
             Tuple of (global_translation_flat, global_rotation_flat, joint_angles)
         """
         # Flatten to 2D for forward kinematics and other calculations
-        hand_pose_flat = hand_pose.view(-1, hand_pose.shape[-1])  # [B*num_grasps, pose_dim]
+        hand_pose_flat = hand_pose.view(
+            -1, hand_pose.shape[-1]
+        )  # [B*num_grasps, pose_dim]
 
         # Validate pose dimensions
-        if self.rot_type == 'r6d':
+        if self.rot_type == "r6d":
             rot_dim = 6
-        elif self.rot_type == 'quat':
+        elif self.rot_type == "quat":
             rot_dim = 4
-        elif self.rot_type == 'axis':  # Axis-angle
+        elif self.rot_type == "axis":  # Axis-angle
             rot_dim = 3
-        elif self.rot_type == 'euler': # Euler angles
+        elif self.rot_type == "euler":  # Euler angles
             rot_dim = 3
         else:
             raise ValueError(f"Unsupported rotation type: {self.rot_type}")
 
         expected_dim = 3 + self.n_dofs + rot_dim
-        assert hand_pose_flat.shape[1] == expected_dim, \
-            f"Hand pose shape error (rot_type: '{self.rot_type}'). " \
-            f"Expected last dimension to be {expected_dim} (3 trans + {self.n_dofs} DoFs + {rot_dim} rot), " \
+        assert hand_pose_flat.shape[1] == expected_dim, (
+            f"Hand pose shape error (rot_type: '{self.rot_type}'). "
+            f"Expected last dimension to be {expected_dim} "
+            f"(3 trans + {self.n_dofs} DoFs + {rot_dim} rot), "
             f"but got {hand_pose_flat.shape[1]}."
+        )
 
         # Ensure input tensors are on the correct device
         hand_pose_flat = self._ensure_device_consistency(hand_pose_flat)
 
         # Decompose hand_pose: translation | joint_angles | rotation_parameters
-        global_translation_flat = hand_pose_flat[:, TRANSLATION_SLICE]  # [B*num_grasps, 3]
-        joint_angles = hand_pose_flat[:, QPOS_SLICE]                    # [B*num_grasps, n_dofs]
-        rotation_params = hand_pose_flat[:, ROTATION_SLICE]             # [B*num_grasps, rot_dim]
+        global_translation_flat = hand_pose_flat[
+            :, TRANSLATION_SLICE
+        ]  # [B*num_grasps, 3]
+        joint_angles = hand_pose_flat[:, QPOS_SLICE]  # [B*num_grasps, n_dofs]
+        rotation_params = hand_pose_flat[:, ROTATION_SLICE]  # [B*num_grasps, rot_dim]
 
         # Ensure joint_angles are on the correct device (for forward kinematics)
         joint_angles = self._ensure_device_consistency(joint_angles)
 
         # Convert rotation parameters to rotation matrices
-        if self.rot_type == 'r6d':
+        if self.rot_type == "r6d":
             from pytorch3d.transforms import rotation_6d_to_matrix
+
             global_rotation_flat = rotation_6d_to_matrix(rotation_params)
-        elif self.rot_type == 'quat':
+        elif self.rot_type == "quat":
             from pytorch3d.transforms import quaternion_to_matrix
+
             global_rotation_flat = quaternion_to_matrix(rotation_params)
-        elif self.rot_type == 'axis':
+        elif self.rot_type == "axis":
             from pytorch3d.transforms import axis_angle_to_matrix
+
             global_rotation_flat = axis_angle_to_matrix(rotation_params)
-        elif self.rot_type == 'euler':
+        elif self.rot_type == "euler":
             from pytorch3d.transforms import euler_angles_to_matrix
+
             # Assuming "XYZ" convention for Euler angles
-            global_rotation_flat = euler_angles_to_matrix(rotation_params, convention="XYZ")
+            global_rotation_flat = euler_angles_to_matrix(
+                rotation_params, convention="XYZ"
+            )
 
         # Reshape to unified multi-grasp format [B, num_grasps, ...]
         batch_size_original = hand_pose.shape[0]
         num_grasps = hand_pose.shape[1]
-        global_translation = global_translation_flat.view(batch_size_original, num_grasps, 3)
-        global_rotation = global_rotation_flat.view(batch_size_original, num_grasps, 3, 3)
+        global_translation = global_translation_flat.view(
+            batch_size_original, num_grasps, 3
+        )
+        global_rotation = global_rotation_flat.view(
+            batch_size_original, num_grasps, 3, 3
+        )
 
         # Save state using HandStateManager
-        self.state.set_pose_state(hand_pose, hand_pose_flat, global_translation, global_rotation)
+        self.state.set_pose_state(
+            hand_pose, hand_pose_flat, global_translation, global_rotation
+        )
 
         return global_translation_flat, global_rotation_flat, joint_angles
 
@@ -481,75 +421,87 @@ class HandModel:
     def _process_contact_points(
         self,
         contact_point_indices: Optional[torch.Tensor],
-        global_translation_flat: torch.Tensor,
-        global_rotation_flat: torch.Tensor
     ) -> None:
         """
         Process contact points if provided.
 
         Args:
             contact_point_indices: Contact point indices
-            global_translation_flat: Flattened global translation
-            global_rotation_flat: Flattened global rotation
         """
         if contact_point_indices is not None:
-            batch_size, n_contact = contact_point_indices.shape
+            contact_point_indices = self._ensure_device_consistency(
+                contact_point_indices
+            )
+            if contact_point_indices.dim() != 2:
+                raise ValueError(
+                    "contact_point_indices must have shape (B_flat, n_contact). "
+                    f"Received tensor with shape {tuple(contact_point_indices.shape)}."
+                )
 
-            # Get contact points in local link coordinates
-            # Shape: (B, n_contact, 3)
+            batch_size, n_contact = contact_point_indices.shape
+            expected_batch = self.state.batch_size_flat
+            if batch_size != expected_batch:
+                raise ValueError(
+                    f"contact_point_indices batch ({batch_size}) does not match flattened batch size ({expected_batch})."
+                )
+
+            if n_contact == 0:
+                empty_contacts = torch.empty(
+                    batch_size, 0, 3, dtype=torch.float, device=self.device
+                )
+                self.state.set_contact_state(contact_point_indices, empty_contacts)
+                return
+
+            # Local contact points for each index (B_flat, n_contact, 3)
             local_contact_points = self.contact_candidates[contact_point_indices]
 
-            # Get link index for each contact point
-            # Shape: (B, n_contact)
+            # Link index for each sampled contact (B_flat, n_contact)
             link_indices = self.global_index_to_link_index[contact_point_indices]
 
-            # Initialize tensor for link transforms (from link local to hand base frame)
-            # Shape: (B, n_contact, 4, 4)
-            contact_link_transforms = torch.zeros(
-                batch_size, n_contact, 4, 4, dtype=torch.float, device=self.device
-            )
-
+            # Stack all link transforms once and gather the ones we need
+            link_matrices = []
             for link_name in self.mesh:
-                link_idx_val = self.link_name_to_link_index[link_name]
-                # Create a mask for contact points belonging to the current link
-                mask = (link_indices == link_idx_val) # Shape: (B, n_contact)
+                matrix = self.state.current_status[link_name].get_matrix()
+                if matrix.dim() == 2:
+                    matrix = matrix.unsqueeze(0)
+                if matrix.shape[0] == 1:
+                    matrix = matrix.expand(batch_size, -1, -1)
+                elif matrix.shape[0] != batch_size:
+                    raise ValueError(
+                        f"Unexpected FK matrix batch size for link '{link_name}': "
+                        f"{matrix.shape[0]} (expected {batch_size})."
+                    )
+                link_matrices.append(matrix)
 
-                if not mask.any(): # Optimization: skip if no contact points on this link
-                    continue
+            link_transforms = torch.stack(link_matrices, dim=1)  # (B_flat, n_links, 4, 4)
 
-                # Get the FK transform matrix for the current link (T_link_to_base)
-                # Shape: (B, 4, 4)
-                current_link_fk_matrix = self.state.current_status[link_name].get_matrix()
+            batch_idx = torch.arange(batch_size, device=self.device).unsqueeze(-1)
+            contact_link_transforms = link_transforms[
+                batch_idx, link_indices
+            ]  # (B_flat, n_contact, 4, 4)
 
-                # Expand and assign the link's transform to the corresponding entries in contact_link_transforms
-                # Unsqueeze to (B, 1, 4, 4), expand to (B, n_contact, 4, 4)
-                expanded_fk_matrix = current_link_fk_matrix.unsqueeze(1).expand(batch_size, n_contact, 4, 4)
-                contact_link_transforms[mask] = expanded_fk_matrix[mask]
-
-            # Convert local contact points to homogeneous coordinates
-            # Shape: (B, n_contact, 4)
-            contact_points_homog = torch.cat(
-                [
-                    local_contact_points, # (B, n_contact, 3)
-                    torch.ones(batch_size, n_contact, 1, dtype=torch.float, device=self.device),
-                ],
-                dim=2,
+            # Convert local points to homogeneous coordinates
+            ones = torch.ones(
+                batch_size, n_contact, 1, dtype=local_contact_points.dtype, device=self.device
             )
+            contact_points_homog = torch.cat([local_contact_points, ones], dim=-1)
 
-            # Transform contact points from local link frames to the hand's base frame
-            # P_base = T_link_to_base @ P_local_homog
-            # contact_points_homog.unsqueeze(3) changes shape to (B, n_contact, 4, 1) for matmul
-            # Resulting shape after matmul and slicing: (B, n_contact, 3)
-            contact_points_in_hand_base_frame = (contact_link_transforms @ contact_points_homog.unsqueeze(3))[:, :, :3, 0]
+            # Transform into the hand base frame
+            contact_points_in_hand_base_frame = (
+                contact_link_transforms @ contact_points_homog.unsqueeze(-1)
+            )[..., :3, 0]
 
-            # Transform contact points from the hand's base frame to the world frame
-            # Use unified multi-grasp format processing
-            contact_points = self._transform_points_to_world(contact_points_in_hand_base_frame)
+            # Transform into world frame (flattened batch already matches)
+            contact_points = self._transform_points_to_world(
+                contact_points_in_hand_base_frame
+            )
             self.state.set_contact_state(contact_point_indices, contact_points)
         else:
             self.state.set_contact_state(None, None)
 
-    def decompose_hand_pose(self, hand_pose: torch.Tensor, rot_type: Optional[str] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def decompose_hand_pose(
+        self, hand_pose: torch.Tensor, rot_type: Optional[str] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Decomposes the hand_pose tensor into global translation, global rotation matrix, and joint angles.
 
@@ -557,7 +509,9 @@ class HandModel:
         This is now a proxy to the HandPhysics static method implementation.
         """
         current_rot_type = rot_type if rot_type is not None else self.rot_type
-        return self.physics.decompose_hand_pose(hand_pose, self.n_dofs, current_rot_type)
+        return self.physics.decompose_hand_pose(
+            hand_pose, self.n_dofs, current_rot_type
+        )
 
     def cal_distance(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -635,11 +589,17 @@ class HandModel:
 
             if n_points_for_this_link == 0:
                 # Store empty tensor info for later
-                points_list.append(torch.empty((batch_size, 0, 3), dtype=link_local_points.dtype, device=device))
+                points_list.append(
+                    torch.empty(
+                        (batch_size, 0, 3), dtype=link_local_points.dtype, device=device
+                    )
+                )
                 continue
 
             # Transform points for this link
-            transformed_link_points = self.state.current_status[link_name].transform_points(link_local_points)
+            transformed_link_points = self.state.current_status[
+                link_name
+            ].transform_points(link_local_points)
 
             # Normalize transformed points to correct batch size
             normalized_points = self._normalize_transformed_points(
@@ -653,7 +613,9 @@ class HandModel:
 
         try:
             # Use torch.cat with pre-allocated list for better performance
-            final_points = torch.cat(points_list, dim=1).to(device)  # Changed dim=-2 to dim=1 for clarity
+            final_points = torch.cat(points_list, dim=1).to(
+                device
+            )  # Changed dim=-2 to dim=1 for clarity
         except RuntimeError as e:
             self._log_concatenation_error(e, points_list, key)
             return torch.empty((batch_size, 0, 3), dtype=torch.float32, device=device)
@@ -665,7 +627,7 @@ class HandModel:
         transformed_points: torch.Tensor,
         expected_batch_size: int,
         n_points: int,
-        link_name: str
+        link_name: str,
     ) -> torch.Tensor:
         """
         Normalize transformed points to have the correct batch size.
@@ -684,17 +646,33 @@ class HandModel:
         # Handle different output shapes from transform_points
         if transformed_points.ndim == 3:
             # Case 1: Output is (1, N_k, 3) but batch_size > 1. Needs expansion.
-            if (transformed_points.shape[0] == 1 and expected_batch_size > 1 and
-                transformed_points.shape[1] == n_points and transformed_points.shape[2] == 3):
-                transformed_points = transformed_points.expand(expected_batch_size, n_points, 3)
+            if (
+                transformed_points.shape[0] == 1
+                and expected_batch_size > 1
+                and transformed_points.shape[1] == n_points
+                and transformed_points.shape[2] == 3
+            ):
+                transformed_points = transformed_points.expand(
+                    expected_batch_size, n_points, 3
+                )
         elif transformed_points.ndim == 2:
             # Case 2a: Output is (N_k, 3). This is the main problematic case.
-            if (transformed_points.shape[0] == n_points and transformed_points.shape[1] == 3):
-                transformed_points = transformed_points.unsqueeze(0).expand(expected_batch_size, n_points, 3)
+            if (
+                transformed_points.shape[0] == n_points
+                and transformed_points.shape[1] == 3
+            ):
+                transformed_points = transformed_points.unsqueeze(0).expand(
+                    expected_batch_size, n_points, 3
+                )
             # Case 2b: Output is (B, 3). This implies N_k was 1 and that dimension was squeezed.
-            elif (transformed_points.shape[0] == expected_batch_size and
-                  transformed_points.shape[1] == 3 and n_points == 1):
-                transformed_points = transformed_points.unsqueeze(1)  # Shape: (batch_size, 1, 3)
+            elif (
+                transformed_points.shape[0] == expected_batch_size
+                and transformed_points.shape[1] == 3
+                and n_points == 1
+            ):
+                transformed_points = transformed_points.unsqueeze(
+                    1
+                )  # Shape: (batch_size, 1, 3)
 
         # Validate final shape
         expected_shape = (expected_batch_size, n_points, 3)
@@ -707,15 +685,23 @@ class HandModel:
 
         return transformed_points
 
-    def _log_concatenation_error(self, error: RuntimeError, points: list, operation: str) -> None:
+    def _log_concatenation_error(
+        self, error: RuntimeError, points: list, operation: str
+    ) -> None:
         """Log detailed error information for concatenation failures."""
         error_msg = f"Error during torch.cat in {operation}: {error}"
         shape_info = "Tensor shapes collected:"
         for i, p in enumerate(points):
-            link_name = list(self.mesh.keys())[i] if i < len(self.mesh) else f"unknown_{i}"
-            shape_info += f"\n  points[{i}] (link: {link_name}): shape {p.shape}, ndim {p.ndim}"
+            link_name = (
+                list(self.mesh.keys())[i] if i < len(self.mesh) else f"unknown_{i}"
+            )
+            shape_info += (
+                f"\n  points[{i}] (link: {link_name}): shape {p.shape}, ndim {p.ndim}"
+            )
 
-        self._log_warning(f"{error_msg}\n{shape_info}\nReturning empty tensor as fallback.")
+        self._log_warning(
+            f"{error_msg}\n{shape_info}\nReturning empty tensor as fallback."
+        )
 
     def _log_warning(self, message: str) -> None:
         """Centralized warning logging."""
@@ -745,7 +731,9 @@ class HandModel:
         -------
         points: (B*num_grasps, `n_keypoints`, 3) torch.Tensor
         """
-        points_in_base_frame = self._collect_and_transform_points("penetration_keypoints")
+        points_in_base_frame = self._collect_and_transform_points(
+            "penetration_keypoints"
+        )
         return self._transform_points_to_world(points_in_base_frame)
 
     def get_plotly_data(
@@ -874,8 +862,10 @@ class HandModel:
     @property
     def penetration_points_path(self) -> pathlib.Path:
         return LEAP_HAND_PENETRATION_POINTS_PATH
-    
-    def _transform_points_to_world(self, points_in_base_frame: torch.Tensor) -> torch.Tensor:
+
+    def _transform_points_to_world(
+        self, points_in_base_frame: torch.Tensor
+    ) -> torch.Tensor:
         """
         Transforms points from the hand's base frame to the world frame.
         Unified multi-grasp format processing.
@@ -887,24 +877,28 @@ class HandModel:
             (B*num_grasps, N, 3) tensor of points in world frame.
         """
         # Use unified multi-grasp format processing
-        global_rotation_flat, global_translation_flat = self._get_flattened_global_transforms()
+        global_rotation_flat, global_translation_flat = (
+            self._get_flattened_global_transforms()
+        )
 
         points_world = points_in_base_frame @ global_rotation_flat.transpose(
             1, 2
         ) + global_translation_flat.unsqueeze(1)
         return points_world
 
-    def __call__(self, hand_pose: torch.Tensor,
-                 scene_pc: Optional[torch.Tensor] = None,
-                 # plane_parameters: Optional[torch.Tensor] = None,
-                 with_meshes: bool = False,
-                 with_surface_points: bool = False,
-                 with_contact_candidates: bool = False,
-                 with_penetration_keypoints: bool = False,
-                 with_penetration: bool = False,
-                 with_distance: bool = False, # ADDED
-                 with_fingertip_keypoints: bool = False
-                 ) -> Dict[str, torch.Tensor]:
+    def __call__(
+        self,
+        hand_pose: torch.Tensor,
+        scene_pc: Optional[torch.Tensor] = None,
+        # plane_parameters: Optional[torch.Tensor] = None,
+        with_meshes: bool = False,
+        with_surface_points: bool = False,
+        with_contact_candidates: bool = False,
+        with_penetration_keypoints: bool = False,
+        with_penetration: bool = False,
+        with_distance: bool = False,  # ADDED
+        with_fingertip_keypoints: bool = False,
+    ) -> Dict[str, torch.Tensor]:
         """
         Main interface to get various hand model information based on hand_pose.
 
@@ -960,29 +954,39 @@ class HandModel:
         """Add surface points to the result dictionary."""
         hand_dict["surface_points"] = self.get_surface_points()
 
-    def _add_penetration_keypoints_to_dict(self, hand_dict: Dict[str, torch.Tensor]) -> None:
+    def _add_penetration_keypoints_to_dict(
+        self, hand_dict: Dict[str, torch.Tensor]
+    ) -> None:
         """Add penetration keypoints to the result dictionary."""
         hand_dict["penetration_keypoints"] = self.get_penetration_keypoints()
 
     def _add_contact_candidates_to_dict(
         self,
         hand_dict: Dict[str, torch.Tensor],
-        scene_pc_processed: Optional[torch.Tensor]
+        scene_pc_processed: Optional[torch.Tensor],
     ) -> None:
         """Add contact candidates distance to the result dictionary."""
         if scene_pc_processed is None:
-            self._log_warning("with_contact_candidates is True but scene_pc is None. Skipping 'contact_candidates_dis'.")
+            self._log_warning(
+                "with_contact_candidates is True but scene_pc is None. Skipping 'contact_candidates_dis'."
+            )
             return
 
         if not _PYTORCH3D_AVAILABLE:
-            raise ImportError("PyTorch3D (specifically knn_points) is required for 'contact_candidates_dis'. Please install it.")
+            raise ImportError(
+                "PyTorch3D (specifically knn_points) is required for 'contact_candidates_dis'. Please install it."
+            )
 
         # Validate and prepare scene_pc
-        scene_pc_batched = self._prepare_scene_pc_for_contact_candidates(scene_pc_processed)
+        scene_pc_batched = self._prepare_scene_pc_for_contact_candidates(
+            scene_pc_processed
+        )
         scene_pc_xyz = scene_pc_batched[..., :3]
 
         # Compute distances
-        contact_candidates_world = self.get_contact_candidates()  # (B_flat, N_candidates, 3)
+        contact_candidates_world = (
+            self.get_contact_candidates()
+        )  # (B_flat, N_candidates, 3)
         if contact_candidates_world.shape[1] == 0:
             hand_dict["contact_candidates_dis"] = torch.empty(
                 self.hand_pose.shape[0], scene_pc_xyz.shape[1], device=self.device
@@ -994,7 +998,9 @@ class HandModel:
             dists_sq, _, _ = knn_points(scene_pc_xyz, contact_candidates_world, K=1)
             hand_dict["contact_candidates_dis"] = dists_sq.squeeze(-1)
 
-    def _prepare_scene_pc_for_contact_candidates(self, scene_pc_processed: torch.Tensor) -> torch.Tensor:
+    def _prepare_scene_pc_for_contact_candidates(
+        self, scene_pc_processed: torch.Tensor
+    ) -> torch.Tensor:
         """Prepare scene_pc for contact candidates distance calculation."""
         # Validate dimensions
         if scene_pc_processed.ndim == 2:
@@ -1007,7 +1013,9 @@ class HandModel:
                     f"Ambiguous broadcast for contact_candidates_dis."
                 )
         elif scene_pc_processed.ndim == 3:
-            if scene_pc_processed.shape[0] != self.state.batch_size_flat:  # 使用展平后的批次大小
+            if (
+                scene_pc_processed.shape[0] != self.state.batch_size_flat
+            ):  # 使用展平后的批次大小
                 raise ValueError(
                     f"scene_pc_processed batch_size {scene_pc_processed.shape[0]} "
                     f"does not match flattened batch_size {self.state.batch_size_flat} "
@@ -1043,13 +1051,19 @@ class HandModel:
             # Process vertices
             link_verts_local = link_mesh_data["vertices"]
             if link_verts_local.numel() > 0:  # Only process non-empty vertices
-                link_verts_transformed = self.state.current_status[link_name].transform_points(link_verts_local)
+                link_verts_transformed = self.state.current_status[
+                    link_name
+                ].transform_points(link_verts_local)
 
                 if link_verts_transformed.ndim == 2:
-                    link_verts_transformed = link_verts_transformed.unsqueeze(0).expand(self.batch_size, -1, -1)
+                    link_verts_transformed = link_verts_transformed.unsqueeze(0).expand(
+                        self.batch_size, -1, -1
+                    )
 
                 # Transform to world coordinates
-                link_verts_world = self._transform_points_to_world(link_verts_transformed)
+                link_verts_world = self._transform_points_to_world(
+                    link_verts_transformed
+                )
                 vertices_list.append(link_verts_world)
 
             # Process faces with offset
@@ -1066,29 +1080,38 @@ class HandModel:
         if vertices_list:
             hand_dict["vertices"] = torch.cat(vertices_list, dim=1)
         else:
-            hand_dict["vertices"] = torch.empty(self.batch_size, 0, 3, device=self.device)
+            hand_dict["vertices"] = torch.empty(
+                self.batch_size, 0, 3, device=self.device
+            )
 
         if faces_list:
             hand_dict["faces"] = torch.cat(faces_list, dim=0)
         else:
             hand_dict["faces"] = torch.empty(0, 3, dtype=torch.long, device=self.device)
 
-    def _add_fingertip_keypoints_to_dict(self, hand_dict: Dict[str, torch.Tensor]) -> None:
+    def _add_fingertip_keypoints_to_dict(
+        self, hand_dict: Dict[str, torch.Tensor]
+    ) -> None:
         """Add fingertip keypoints to the result dictionary. Optimized version."""
         if not self.fingertip_names:
-            self._log_warning("with_fingertip_keypoints is True, but self.fingertip_names is empty.")
-            hand_dict["fingertip_keypoints"] = torch.empty(self.batch_size, 0, 3, device=self.device)
+            self._log_warning(
+                "with_fingertip_keypoints is True, but self.fingertip_names is empty."
+            )
+            hand_dict["fingertip_keypoints"] = torch.empty(
+                self.batch_size, 0, 3, device=self.device
+            )
             return
 
         # Pre-filter valid fingertip links
         valid_fingertip_names = [
-            name for name in self.fingertip_names
-            if name in self.state.current_status
+            name for name in self.fingertip_names if name in self.state.current_status
         ]
 
         if not valid_fingertip_names:
             self._log_warning("No valid fingertip links found in current_status.")
-            hand_dict["fingertip_keypoints"] = torch.empty(self.batch_size, 0, 3, device=self.device)
+            hand_dict["fingertip_keypoints"] = torch.empty(
+                self.batch_size, 0, 3, device=self.device
+            )
             return
 
         # Vectorized processing of fingertip origins
@@ -1099,7 +1122,9 @@ class HandModel:
             origin_in_hand_base = matrix[..., :3, 3]
 
             if origin_in_hand_base.ndim == 1:
-                origin_in_hand_base = origin_in_hand_base.unsqueeze(0).expand(self.batch_size, -1)
+                origin_in_hand_base = origin_in_hand_base.unsqueeze(0).expand(
+                    self.batch_size, -1
+                )
 
             # Transform to world coordinates and add fingertip dimension
             origin_world = self._transform_points_to_world(origin_in_hand_base)
@@ -1119,7 +1144,9 @@ class HandModel:
             Flattened tensor with shape [B*num_grasps, ...]
         """
         if tensor.dim() < 2:
-            raise ValueError(f"Tensor must have at least 2 dimensions, got {tensor.dim()}")
+            raise ValueError(
+                f"Tensor must have at least 2 dimensions, got {tensor.dim()}"
+            )
 
         # Flatten first two dimensions
         new_shape = [-1] + list(tensor.shape[2:])
@@ -1136,7 +1163,9 @@ class HandModel:
             Unflattened tensor with shape [B, num_grasps, ...]
         """
         if tensor.dim() < 1:
-            raise ValueError(f"Tensor must have at least 1 dimension, got {tensor.dim()}")
+            raise ValueError(
+                f"Tensor must have at least 1 dimension, got {tensor.dim()}"
+            )
 
         # Unflatten first dimension
         new_shape = [self.batch_size_original, self.num_grasps] + list(tensor.shape[1:])
@@ -1153,7 +1182,9 @@ class HandModel:
         """
         return self.state.get_flattened_global_transforms()
 
-    def _expand_input_for_multi_grasp(self, input_tensor: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    def _expand_input_for_multi_grasp(
+        self, input_tensor: Optional[torch.Tensor]
+    ) -> Optional[torch.Tensor]:
         """
         Expands a tensor to match the flattened batch size for unified multi-grasp processing.
         E.g., from (B, N, D) to (B*num_grasps, N, D).
@@ -1171,19 +1202,31 @@ class HandModel:
             if self.state.batch_size_original == 1:
                 input_batched = input_tensor.unsqueeze(0)  # (N, D) -> (1, N, D)
             else:
-                raise ValueError(f"Input tensor (shape {input_tensor.shape}) is 2D, but original batch_size is {self.state.batch_size_original}. Ambiguous broadcast.")
+                raise ValueError(
+                    f"Input tensor (shape {input_tensor.shape}) is 2D, but original batch_size is {self.state.batch_size_original}. Ambiguous broadcast."
+                )
         elif input_tensor.ndim >= 3:
             if input_tensor.shape[0] != self.state.batch_size_original:
-                raise ValueError(f"Input tensor batch_size {input_tensor.shape[0]} does not match original batch_size {self.state.batch_size_original}.")
+                raise ValueError(
+                    f"Input tensor batch_size {input_tensor.shape[0]} does not match original batch_size {self.state.batch_size_original}."
+                )
             input_batched = input_tensor
         else:
-            raise ValueError(f"Input tensor must have ndim 2 or 3, got {input_tensor.ndim}")
+            raise ValueError(
+                f"Input tensor must have ndim 2 or 3, got {input_tensor.ndim}"
+            )
 
         # 扩展到 (B, num_grasps, N, D) 然后展平为 (B*num_grasps, N, D)
         reshape_shape = [-1] + list(input_batched.shape[1:])
-        expanded = input_batched.unsqueeze(1).expand(
-            self.state.batch_size_original, self.state.num_grasps, *input_batched.shape[1:]
-        ).reshape(*reshape_shape)
+        expanded = (
+            input_batched.unsqueeze(1)
+            .expand(
+                self.state.batch_size_original,
+                self.state.num_grasps,
+                *input_batched.shape[1:],
+            )
+            .reshape(*reshape_shape)
+        )
 
         return expanded
 
@@ -1191,7 +1234,6 @@ class HandModel:
 if __name__ == "__main__":
     # Initialize hand model
     hand_model = HandModel(
-        hand_model_type=HandModelType.LEAP, device='cpu', n_surface_points=1000
+        hand_model_type=HandModelType.LEAP, device="cpu", n_surface_points=1000
     )
     print(hand_model.urdf_path)
-

@@ -5,35 +5,36 @@ This module provides utility functions for cache management,
 including file validation, cache path generation, and health checks.
 """
 
-import os
-import time
 import hashlib
 import logging
+import os
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
+
 import h5py
-from typing import Optional, Dict, Any, Callable, Tuple
+
+from .constants import (CACHE_CREATION_TIMEOUT, CACHE_FILE_CHECK_INTERVAL,
+                        CACHE_HEALTH_CHECK_INTERVAL,
+                        CACHE_VALIDATION_TEST_INDEX)
 from .dataset_config import CachedDatasetConfig
-from .constants import (
-    CACHE_CREATION_TIMEOUT, CACHE_FILE_CHECK_INTERVAL, CACHE_VALIDATION_TEST_INDEX,
-    CACHE_HEALTH_CHECK_INTERVAL
-)
-from .distributed_utils import (
-    is_distributed_training,
-    is_main_process,
-    distributed_barrier,
-    ensure_directory_exists,
-    should_create_cache
-)
+from .distributed_utils import (distributed_barrier, ensure_directory_exists,
+                                is_distributed_training, is_main_process,
+                                should_create_cache)
 
 
-def wait_for_file(file_path: str, timeout: int = CACHE_CREATION_TIMEOUT, check_interval: float = CACHE_FILE_CHECK_INTERVAL) -> bool:
+def wait_for_file(
+    file_path: str,
+    timeout: int = CACHE_CREATION_TIMEOUT,
+    check_interval: float = CACHE_FILE_CHECK_INTERVAL,
+) -> bool:
     """
     Wait for file creation to complete.
-    
+
     Args:
         file_path: File path
         timeout: Timeout in seconds
         check_interval: Check interval in seconds
-    
+
     Returns:
         bool: Whether file was successfully created
     """
@@ -44,7 +45,7 @@ def wait_for_file(file_path: str, timeout: int = CACHE_CREATION_TIMEOUT, check_i
             time.sleep(0.5)
             try:
                 # Try to open file to verify its integrity
-                with h5py.File(file_path, 'r') as f:
+                with h5py.File(file_path, "r") as _:
                     # If successfully opened, file creation is complete
                     return True
             except (OSError, IOError):
@@ -67,7 +68,7 @@ def generate_cache_filename(
     num_grasps: Optional[int] = None,
     grasp_sampling_strategy: Optional[str] = None,
     use_exhaustive_sampling: bool = False,
-    exhaustive_sampling_strategy: Optional[str] = None
+    exhaustive_sampling_strategy: Optional[str] = None,
 ) -> str:
     """
     Generate unique cache filename based on parameters.
@@ -111,34 +112,40 @@ def generate_cache_filename(
     if exhaustive_sampling_strategy is not None:
         params_string += f",exhaustive_sampling_strategy={exhaustive_sampling_strategy}"
 
-    cache_hash = hashlib.md5(params_string.encode('utf-8')).hexdigest()
-    return f'{prefix}_{cache_hash}.h5'
+    cache_hash = hashlib.md5(params_string.encode("utf-8")).hexdigest()
+    return f"{prefix}_{cache_hash}.h5"
 
 
 def validate_cache_file(cache_path: str, expected_items: int) -> bool:
     """
     Validate cache file integrity and item count.
-    
+
     Args:
         cache_path: Path to cache file
         expected_items: Expected number of items
-        
+
     Returns:
         bool: True if cache is valid
     """
     if not os.path.exists(cache_path):
         return False
-    
+
     try:
-        with h5py.File(cache_path, 'r') as hf_check:
+        with h5py.File(cache_path, "r") as hf_check:
             if len(hf_check) == expected_items:
-                logging.info(f"Cache file has {len(hf_check)} items, matching expected {expected_items}. Cache considered valid.")
+                logging.info(
+                    f"Cache file has {len(hf_check)} items, matching expected {expected_items}. Cache considered valid."
+                )
                 return True
             else:
-                logging.warning(f"Cache file has {len(hf_check)} items, but expected {expected_items}. Cache considered invalid.")
+                logging.warning(
+                    f"Cache file has {len(hf_check)} items, but expected {expected_items}. Cache considered invalid."
+                )
                 return False
     except Exception as e:
-        logging.error(f"Error checking cache validity {cache_path}: {e}. Cache considered invalid.")
+        logging.error(
+            f"Error checking cache validity {cache_path}: {e}. Cache considered invalid."
+        )
         return False
 
 
@@ -170,14 +177,14 @@ def check_cache_health(hf: Optional[h5py.File], num_items: int) -> bool:
         return False
 
 
-def get_cache_directory(root_dir: str, cache_subdir: str = 'cache_sceneleappro') -> str:
+def get_cache_directory(root_dir: str, cache_subdir: str = "cache_sceneleappro") -> str:
     """
     Get cache directory path.
-    
+
     Args:
         root_dir: Dataset root directory
         cache_subdir: Cache subdirectory name
-        
+
     Returns:
         str: Cache directory path
     """
@@ -187,7 +194,7 @@ def get_cache_directory(root_dir: str, cache_subdir: str = 'cache_sceneleappro')
 def cleanup_cache_file(hf: Optional[h5py.File], cache_path: str = None):
     """
     Clean up cache file resources.
-    
+
     Args:
         hf: HDF5 file handle to close
         cache_path: Cache file path for logging
@@ -214,11 +221,11 @@ def get_cache_info(
     max_points: int,
     num_neg_prompts: int,
     enable_cropping: bool,
-    coordinate_system_mode: str
+    coordinate_system_mode: str,
 ) -> Dict[str, Any]:
     """
     Get comprehensive cache information.
-    
+
     Args:
         cache_path: Path to cache file
         cache_loaded: Whether cache is loaded
@@ -228,38 +235,38 @@ def get_cache_info(
         num_neg_prompts: Number of negative prompts
         enable_cropping: Whether cropping is enabled
         coordinate_system_mode: Coordinate system mode
-        
+
     Returns:
         dict: Cache information dictionary
     """
     info = {
-        'cache_path': cache_path,
-        'cache_loaded': cache_loaded,
-        'num_items': num_items,
-        'cache_version': cache_version,
-        'max_points': max_points,
-        'num_neg_prompts': num_neg_prompts,
-        'enable_cropping': enable_cropping,
-        'coordinate_system_mode': coordinate_system_mode
+        "cache_path": cache_path,
+        "cache_loaded": cache_loaded,
+        "num_items": num_items,
+        "cache_version": cache_version,
+        "max_points": max_points,
+        "num_neg_prompts": num_neg_prompts,
+        "enable_cropping": enable_cropping,
+        "coordinate_system_mode": coordinate_system_mode,
     }
-    
+
     # Add file size if cache exists
     if os.path.exists(cache_path):
         try:
             file_size = os.path.getsize(cache_path)
-            info['cache_file_size_bytes'] = file_size
-            info['cache_file_size_mb'] = file_size / (1024 * 1024)
+            info["cache_file_size_bytes"] = file_size
+            info["cache_file_size_mb"] = file_size / (1024 * 1024)
         except OSError:
-            info['cache_file_size_bytes'] = None
-            info['cache_file_size_mb'] = None
-    
+            info["cache_file_size_bytes"] = None
+            info["cache_file_size_mb"] = None
+
     return info
 
 
 def log_cache_status(cache_path: str, cache_loaded: bool, num_items: int):
     """
     Log cache status information.
-    
+
     Args:
         cache_path: Path to cache file
         cache_loaded: Whether cache is loaded
@@ -271,14 +278,16 @@ def log_cache_status(cache_path: str, cache_loaded: bool, num_items: int):
         logging.warning(f"Cache not loaded: {cache_path}")
 
 
-def estimate_cache_size(num_items: int, avg_points_per_item: int = 4096) -> Dict[str, float]:
+def estimate_cache_size(
+    num_items: int, avg_points_per_item: int = 4096
+) -> Dict[str, float]:
     """
     Estimate cache file size based on dataset parameters.
-    
+
     Args:
         num_items: Number of items in dataset
         avg_points_per_item: Average points per item
-        
+
     Returns:
         dict: Size estimates in different units
     """
@@ -287,24 +296,24 @@ def estimate_cache_size(num_items: int, avg_points_per_item: int = 4096) -> Dict
     # Hand pose: 23 * 4 bytes
     # SE3 matrix: 16 * 4 bytes
     # Prompts: ~100 bytes average
-    
+
     point_cloud_size = num_items * avg_points_per_item * 6 * 4  # 6D float32
     hand_pose_size = num_items * 23 * 4  # 23 float32
     se3_size = num_items * 16 * 4  # 4x4 float32
     prompt_size = num_items * 100  # Rough estimate for text
-    
+
     total_bytes = point_cloud_size + hand_pose_size + se3_size + prompt_size
-    
+
     # Add compression factor (HDF5 gzip typically achieves 2-4x compression)
     compressed_bytes = total_bytes / 3
-    
+
     return {
-        'uncompressed_bytes': total_bytes,
-        'compressed_bytes': compressed_bytes,
-        'uncompressed_mb': total_bytes / (1024 * 1024),
-        'compressed_mb': compressed_bytes / (1024 * 1024),
-        'uncompressed_gb': total_bytes / (1024 * 1024 * 1024),
-        'compressed_gb': compressed_bytes / (1024 * 1024 * 1024)
+        "uncompressed_bytes": total_bytes,
+        "compressed_bytes": compressed_bytes,
+        "uncompressed_mb": total_bytes / (1024 * 1024),
+        "compressed_mb": compressed_bytes / (1024 * 1024),
+        "uncompressed_gb": total_bytes / (1024 * 1024 * 1024),
+        "compressed_gb": compressed_bytes / (1024 * 1024 * 1024),
     }
 
 
@@ -368,9 +377,12 @@ class CacheManager:
         if self._is_cache_available():
             logging.info("CacheManager: Valid cache found, loading...")
             try:
-                self.hf = h5py.File(self.cache_path, 'r')
+                self.hf = h5py.File(self.cache_path, "r")
                 self.cache_loaded = True
-                logging.info(f"CacheManager: Cache loaded successfully with {len(self.hf)} items")
+                logging.info(
+                    f"CacheManager: Cache loaded successfully "
+                    f"with {len(self.hf)} items"
+                )
                 return self.hf, self.cache_loaded
             except Exception as e:
                 logging.error(f"CacheManager: Error loading cache: {e}")
@@ -381,7 +393,9 @@ class CacheManager:
         if is_distributed_training():
             # Distributed training logic
             if should_create_cache():
-                logging.info("CacheManager: Main process will create cache in distributed training")
+                logging.info(
+                    "CacheManager: Main process will create cache in distributed training"
+                )
                 # Main process creates cache, others wait
                 if is_main_process():
                     self._create_cache_internal()
@@ -395,13 +409,20 @@ class CacheManager:
                     # The cache will be loaded after data population in _ensure_cache_populated
                     self.hf = None
                     self.cache_loaded = False
-                    logging.info("CacheManager: Empty cache file detected in distributed training, will populate later")
+                    logging.info(
+                        "CacheManager: Empty cache file detected in distributed "
+                        "training, will populate later"
+                    )
                 else:
-                    logging.error("CacheManager: Timeout waiting for cache creation in distributed training")
+                    logging.error(
+                        "CacheManager: Timeout waiting for cache creation in distributed training"
+                    )
                     self.hf = None
                     self.cache_loaded = False
             else:
-                logging.info("CacheManager: Cache creation disabled in distributed training")
+                logging.info(
+                    "CacheManager: Cache creation disabled in distributed training"
+                )
                 self.hf = None
                 self.cache_loaded = False
         else:
@@ -432,7 +453,7 @@ class CacheManager:
             logging.info(f"CacheManager: Creating empty cache file: {self.cache_path}")
 
             # Create empty cache file
-            with h5py.File(self.cache_path, 'w') as hf_write:
+            with h5py.File(self.cache_path, "w") as _:
                 # Create empty file - actual data will be populated later
                 pass
 
@@ -448,7 +469,9 @@ class CacheManager:
                     os.remove(self.cache_path)
                     logging.info("CacheManager: Cleaned up partial cache file")
                 except Exception as cleanup_e:
-                    logging.warning(f"CacheManager: Error cleaning up partial cache: {cleanup_e}")
+                    logging.warning(
+                        f"CacheManager: Error cleaning up partial cache: {cleanup_e}"
+                    )
             raise
 
     def create_cache(self, data_loader_func: Callable) -> None:
@@ -465,7 +488,9 @@ class CacheManager:
 
         # 分布式训练保护：只有主进程或单进程模式才能创建缓存
         if is_distributed_training() and not is_main_process():
-            logging.info("CacheManager: Non-main process in distributed training, skipping cache creation")
+            logging.info(
+                "CacheManager: Non-main process in distributed training, skipping cache creation"
+            )
             return
 
         try:
@@ -477,7 +502,7 @@ class CacheManager:
             # Validate the created cache
             if self.validate_cache():
                 # Load the created cache
-                self.hf = h5py.File(self.cache_path, 'r')
+                self.hf = h5py.File(self.cache_path, "r")
                 self.cache_loaded = True
                 logging.info("CacheManager: Cache creation completed successfully")
             else:
@@ -509,7 +534,9 @@ class CacheManager:
         """
         if idx - self.last_health_check >= self.health_check_interval:
             if not check_cache_health(self.hf, self.num_items):
-                logging.warning(f"CacheManager: Cache health check failed at index {idx}")
+                logging.warning(
+                    f"CacheManager: Cache health check failed at index {idx}"
+                )
             self.last_health_check = idx
 
     def cleanup(self) -> None:
@@ -535,7 +562,7 @@ class CacheManager:
             max_points=self.config.max_points,
             num_neg_prompts=self.config.num_neg_prompts,
             enable_cropping=self.config.enable_cropping,
-            coordinate_system_mode=self.config.mode
+            coordinate_system_mode=self.config.mode,
         )
 
     def log_status(self) -> None:

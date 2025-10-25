@@ -1,6 +1,7 @@
+from typing import Tuple, Union
+
 import numpy as np
 import torch
-from typing import Union, Tuple
 
 
 def transform_point(T: np.ndarray, point: np.ndarray) -> np.ndarray:

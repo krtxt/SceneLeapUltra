@@ -3,11 +3,12 @@ Text Encoder Module
 Implements text feature extraction based on CLIP, supporting encoding of positive and negative prompts
 """
 
-import torch
-import torch.nn as nn
 import logging
 from typing import List, Union
+
 import open_clip
+import torch
+import torch.nn as nn
 
 
 class TextEncoder(nn.Module):

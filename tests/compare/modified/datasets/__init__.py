@@ -1,9 +1,13 @@
 import logging
+
 from torch.utils.data import Dataset
-from .sceneleappro_cached import SceneLeapProDatasetCached, ForMatchSceneLeapProDatasetCached
-from .sceneleapplus_cached import SceneLeapPlusDatasetCached
-from .objectcentric_grasp_dataset import ObjectCentricGraspDataset
+
 from .objectcentric_grasp_cached import ObjectCentricGraspDatasetCached
+from .objectcentric_grasp_dataset import ObjectCentricGraspDataset
+from .sceneleapplus_cached import SceneLeapPlusDatasetCached
+from .sceneleappro_cached import (ForMatchSceneLeapProDatasetCached,
+                                  SceneLeapProDatasetCached)
+
 
 def build_datasets(data_cfg, stage=None):
     """

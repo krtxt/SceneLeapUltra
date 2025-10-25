@@ -4,20 +4,22 @@ import os
 from pathlib import Path
 
 import hydra
+import numpy as np
 import pytorch_lightning as pl
 import wandb
-import numpy as np
 from omegaconf import OmegaConf
-from pytorch_lightning.callbacks import ModelCheckpoint, ModelSummary, RichProgressBar
-from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
-from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+from pytorch_lightning.callbacks import (ModelCheckpoint, ModelSummary,
+                                         RichProgressBar)
+from pytorch_lightning.callbacks.progress.rich_progress import \
+    RichProgressBarTheme
+from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
 from datasets.scenedex_datamodule import SceneLeapDataModule
-from models.diffuser_lightning import DDPMLightning
 from models.cvae import GraspCVAELightning
-from utils.logging_utils import setup_basic_logging, setup_file_logging
-from utils.git_utils import get_git_head_hash
+from models.diffuser_lightning import DDPMLightning
 from utils.backup_utils import backup_code
+from utils.git_utils import get_git_head_hash
+from utils.logging_utils import setup_basic_logging, setup_file_logging
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 

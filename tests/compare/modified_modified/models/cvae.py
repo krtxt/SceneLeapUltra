@@ -1,16 +1,21 @@
+import logging
+from collections import defaultdict
+from functools import partial
+from typing import Any, Dict
+
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from functools import partial
-from typing import Dict, Any
-from collections import defaultdict
 
 from models.backbone import build_backbone
-from models.utils.helpers import GenericMLP
 from models.loss import GraspLossPose
-from utils.hand_helper import process_hand_pose, process_hand_pose_test, denorm_hand_pose_robust
-import logging
-from .utils.log_colors import HEADER, BLUE, GREEN, YELLOW, RED, ENDC, BOLD, UNDERLINE
+from models.utils.helpers import GenericMLP
+from utils.hand_helper import (denorm_hand_pose_robust, process_hand_pose,
+                               process_hand_pose_test)
+
+from .utils.log_colors import (BLUE, BOLD, ENDC, GREEN, HEADER, RED, UNDERLINE,
+                               YELLOW)
+
 
 class GraspCVAELightning(pl.LightningModule):
     def __init__(self, cfg):

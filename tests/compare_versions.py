@@ -3,10 +3,10 @@
 脚本用于比较两个版本的代码，找出可能导致训练结果不同的差异。
 """
 
-import os
-import hashlib
-from pathlib import Path
 import difflib
+import hashlib
+import os
+from pathlib import Path
 
 # 定义要比较的关键文件列表
 KEY_FILES = [

@@ -5,10 +5,11 @@ Wraps the Point Transformer implementation to provide a unified interface
 compatible with PointNet2 and PTv3 backbones.
 """
 
+import logging
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-from typing import Tuple
-import logging
 
 from .point_transformer import PointTransformerEnc
 

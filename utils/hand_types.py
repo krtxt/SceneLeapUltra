@@ -6,4 +6,4 @@ class HandModelType(Enum):
 
     def __str__(self) -> str:
         """Return enum member name as string."""
-        return self.name 
+        return self.name

@@ -1,9 +1,11 @@
 import numpy as np
 import torch
+from pytorch3d.transforms import (euler_angles_to_matrix,
+                                  matrix_to_euler_angles, matrix_to_quaternion,
+                                  quaternion_invert, quaternion_multiply,
+                                  quaternion_to_matrix)
 from scipy.spatial.transform import Rotation as R
-from pytorch3d.transforms import (euler_angles_to_matrix, matrix_to_euler_angles,
-                                quaternion_to_matrix, matrix_to_quaternion,
-                                quaternion_invert, quaternion_multiply)
+
 # 尝试导入 open3d，如果失败则SOR功能不可用
 try:
     import open3d as o3d

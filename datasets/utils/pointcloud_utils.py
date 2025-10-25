@@ -20,9 +20,7 @@ except ImportError:
 
 
 def add_rgb_to_pointcloud(
-    pointcloud_xyz: np.ndarray,
-    rgb_image: np.ndarray,
-    camera
+    pointcloud_xyz: np.ndarray, rgb_image: np.ndarray, camera
 ) -> np.ndarray:
     """
     Add RGB colors to point cloud by projecting to image plane.
@@ -56,8 +54,7 @@ def add_rgb_to_pointcloud(
 
         # Check pixel bounds
         pixel_valid_mask = (
-            (u >= 0) & (u < camera.width) &
-            (v >= 0) & (v < camera.height)
+            (u >= 0) & (u < camera.width) & (v >= 0) & (v < camera.height)
         )
 
         if np.any(pixel_valid_mask):
@@ -66,16 +63,16 @@ def add_rgb_to_pointcloud(
 
             # Map colors back to point cloud
             valid_indices = np.where(valid_depth_mask)[0][pixel_valid_mask]
-            colors[valid_indices] = rgb_image[valid_v, valid_u].astype(np.float32) / 255.0
+            colors[valid_indices] = (
+                rgb_image[valid_v, valid_u].astype(np.float32) / 255.0
+            )
 
     # Combine xyz and rgb
     return np.hstack([points_3d, colors])
 
 
 def map_2d_mask_to_3d_pointcloud(
-    point_cloud_xyz: np.ndarray,
-    mask_2d: np.ndarray,
-    camera
+    point_cloud_xyz: np.ndarray, mask_2d: np.ndarray, camera
 ) -> np.ndarray:
     """
     Map 2D instance mask to 3D point cloud mask by projecting points to image plane.
@@ -101,7 +98,11 @@ def map_2d_mask_to_3d_pointcloud(
 
     # Project valid points to image plane
     valid_points = point_cloud_xyz[valid_depth_mask]
-    valid_x, valid_y, valid_z = valid_points[:, 0], valid_points[:, 1], valid_points[:, 2]
+    valid_x, valid_y, valid_z = (
+        valid_points[:, 0],
+        valid_points[:, 1],
+        valid_points[:, 2],
+    )
 
     # Calculate pixel coordinates
     u = (valid_x * camera.fx / valid_z + camera.cx).astype(int)
@@ -127,9 +128,7 @@ def map_2d_mask_to_3d_pointcloud(
 
 
 def crop_point_cloud_to_objects(
-    point_cloud_with_rgb: np.ndarray,
-    instance_mask: np.ndarray,
-    camera
+    point_cloud_with_rgb: np.ndarray, instance_mask: np.ndarray, camera
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop point cloud to focus on object regions using instance mask.
@@ -150,7 +149,9 @@ def crop_point_cloud_to_objects(
 
         # Check if any objects are detected
         if not np.any(all_objects_mask):
-            print("Warning: No objects detected in instance mask, returning original point cloud")
+            print(
+                "Warning: No objects detected in instance mask, returning original point cloud"
+            )
             return point_cloud_with_rgb, np.ones(len(point_cloud_with_rgb), dtype=bool)
 
         # Find bounding rectangle of all objects
@@ -171,16 +172,22 @@ def crop_point_cloud_to_objects(
 
         # Validate bounding box
         if min_x >= max_x or min_y >= max_y:
-            print("Warning: Invalid bounding box after padding, returning original point cloud")
+            print(
+                "Warning: Invalid bounding box after padding, returning original point cloud"
+            )
             return point_cloud_with_rgb, np.ones(len(point_cloud_with_rgb), dtype=bool)
 
         # Project point cloud and apply cropping
-        crop_mask = get_crop_mask(point_cloud_with_rgb, camera, min_x, max_x, min_y, max_y)
+        crop_mask = get_crop_mask(
+            point_cloud_with_rgb, camera, min_x, max_x, min_y, max_y
+        )
         cropped_point_cloud = point_cloud_with_rgb[crop_mask]
 
         # Ensure minimum number of points
         if len(cropped_point_cloud) < 1000:
-            print(f"Warning: Too few points after cropping ({len(cropped_point_cloud)}), returning original")
+            print(
+                f"Warning: Too few points after cropping ({len(cropped_point_cloud)}), returning original"
+            )
             return point_cloud_with_rgb, np.ones(len(point_cloud_with_rgb), dtype=bool)
 
         return cropped_point_cloud, crop_mask
@@ -193,7 +200,10 @@ def crop_point_cloud_to_objects(
 def get_crop_mask(
     point_cloud_with_rgb: np.ndarray,
     camera,
-    min_x: int, max_x: int, min_y: int, max_y: int
+    min_x: int,
+    max_x: int,
+    min_y: int,
+    max_y: int,
 ) -> np.ndarray:
     """
     Get crop mask for point cloud based on bounding box.
@@ -216,16 +226,17 @@ def get_crop_mask(
 
     # Project valid points to image plane
     valid_points = points_3d[valid_depth_mask]
-    valid_x, valid_y, valid_z = valid_points[:, 0], valid_points[:, 1], valid_points[:, 2]
+    valid_x, valid_y, valid_z = (
+        valid_points[:, 0],
+        valid_points[:, 1],
+        valid_points[:, 2],
+    )
 
-    u = (valid_x * camera.fx / valid_z + camera.cx)
-    v = (valid_y * camera.fy / valid_z + camera.cy)
+    u = valid_x * camera.fx / valid_z + camera.cx
+    v = valid_y * camera.fy / valid_z + camera.cy
 
     # Filter points within bounding rectangle
-    crop_mask_valid = (
-        (u >= min_x) & (u <= max_x) &
-        (v >= min_y) & (v <= max_y)
-    )
+    crop_mask_valid = (u >= min_x) & (u <= max_x) & (v >= min_y) & (v <= max_y)
 
     # Map back to original point cloud indices
     crop_mask = np.zeros(len(point_cloud_with_rgb), dtype=bool)
@@ -242,7 +253,7 @@ def remove_outliers_from_point_cloud(
     distance_threshold_factor: float = 2.5,
     min_object_points: int = 50,
     statistical_nb_neighbors: int = 20,
-    statistical_std_ratio: float = 2.0
+    statistical_std_ratio: float = 2.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Remove outliers from point cloud based on object mask and spatial distribution.
@@ -300,7 +311,7 @@ def remove_outliers_from_point_cloud(
 def _remove_outliers_by_object_center_distance(
     xyz_points: np.ndarray,
     object_mask: np.ndarray,
-    distance_threshold_factor: float = 2.5
+    distance_threshold_factor: float = 2.5,
 ) -> np.ndarray:
     """
     Remove outliers based on distance from object center.
@@ -344,9 +355,7 @@ def _remove_outliers_by_object_center_distance(
 
 
 def _remove_outliers_statistical(
-    xyz_points: np.ndarray,
-    nb_neighbors: int = 20,
-    std_ratio: float = 2.0
+    xyz_points: np.ndarray, nb_neighbors: int = 20, std_ratio: float = 2.0
 ) -> np.ndarray:
     """
     Remove statistical outliers based on local point density.
@@ -383,9 +392,7 @@ def _remove_outliers_statistical(
 
 
 def _remove_outliers_statistical_numpy(
-    xyz_points: np.ndarray,
-    nb_neighbors: int = 20,
-    std_ratio: float = 2.0
+    xyz_points: np.ndarray, nb_neighbors: int = 20, std_ratio: float = 2.0
 ) -> np.ndarray:
     """
     Numpy-based statistical outlier removal (fallback when Open3D not available).
@@ -404,7 +411,9 @@ def _remove_outliers_statistical_numpy(
     if SCIPY_AVAILABLE:
         # Use scipy KDTree for efficient neighbor search
         tree = cKDTree(xyz_points)
-        distances, _ = tree.query(xyz_points, k=nb_neighbors + 1)  # +1 because first is the point itself
+        distances, _ = tree.query(
+            xyz_points, k=nb_neighbors + 1
+        )  # +1 because first is the point itself
         avg_distances = np.mean(distances[:, 1:], axis=1)  # Exclude self-distance
     else:
         # Fallback to brute force method (slower but works without scipy)
@@ -413,8 +422,10 @@ def _remove_outliers_statistical_numpy(
             # Calculate distances to all other points
             dists = np.linalg.norm(xyz_points - point, axis=1)
             # Get k nearest neighbors (excluding self)
-            nearest_dists = np.partition(dists, nb_neighbors)[:nb_neighbors + 1]
-            nearest_dists = nearest_dists[nearest_dists > 0]  # Exclude self-distance (0)
+            nearest_dists = np.partition(dists, nb_neighbors)[: nb_neighbors + 1]
+            nearest_dists = nearest_dists[
+                nearest_dists > 0
+            ]  # Exclude self-distance (0)
             if len(nearest_dists) >= nb_neighbors:
                 avg_distances.append(np.mean(nearest_dists[:nb_neighbors]))
             else:
@@ -433,10 +444,7 @@ def _remove_outliers_statistical_numpy(
 
 
 def create_table_plane(
-    table_size: float,
-    device: torch.device,
-    dtype: torch.dtype,
-    table_z: float = 0.0
+    table_size: float, device: torch.device, dtype: torch.dtype, table_z: float = 0.0
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create a square table plane mesh centered at the origin on the XY plane.
@@ -497,7 +505,9 @@ def sample_points_from_mesh_separated(
             Object mask indicating points sampled from the object mesh (max_points,)
     """
     if max_points <= 0:
-        empty_points = torch.zeros((0, 3), dtype=obj_verts.dtype, device=obj_verts.device)
+        empty_points = torch.zeros(
+            (0, 3), dtype=obj_verts.dtype, device=obj_verts.device
+        )
         empty_mask = torch.zeros((0,), dtype=torch.bool, device=obj_verts.device)
         return empty_points, empty_mask
 
@@ -522,9 +532,13 @@ def sample_points_from_mesh_separated(
                     obj_mesh, num_samples=num_obj_points
                 ).squeeze(0)
             else:
-                obj_points = torch.zeros((num_obj_points, 3), dtype=dtype, device=device)
+                obj_points = torch.zeros(
+                    (num_obj_points, 3), dtype=dtype, device=device
+                )
             sampled_chunks.append(obj_points)
-            mask_chunks.append(torch.ones((obj_points.shape[0],), dtype=torch.bool, device=device))
+            mask_chunks.append(
+                torch.ones((obj_points.shape[0],), dtype=torch.bool, device=device)
+            )
 
         if num_table_points > 0:
             if table_verts.numel() > 0 and table_faces.numel() > 0:
@@ -533,9 +547,13 @@ def sample_points_from_mesh_separated(
                     table_mesh, num_samples=num_table_points
                 ).squeeze(0)
             else:
-                table_points = torch.zeros((num_table_points, 3), dtype=dtype, device=device)
+                table_points = torch.zeros(
+                    (num_table_points, 3), dtype=dtype, device=device
+                )
             sampled_chunks.append(table_points)
-            mask_chunks.append(torch.zeros((table_points.shape[0],), dtype=torch.bool, device=device))
+            mask_chunks.append(
+                torch.zeros((table_points.shape[0],), dtype=torch.bool, device=device)
+            )
 
         if not sampled_chunks:
             zero_points = torch.zeros((max_points, 3), dtype=dtype, device=device)
@@ -543,14 +561,22 @@ def sample_points_from_mesh_separated(
             return zero_points, zero_mask
 
         combined_points = torch.cat(sampled_chunks, dim=0)
-        combined_mask = torch.cat(mask_chunks, dim=0) if mask_chunks else torch.zeros((combined_points.shape[0],), dtype=torch.bool, device=device)
+        combined_mask = (
+            torch.cat(mask_chunks, dim=0)
+            if mask_chunks
+            else torch.zeros(
+                (combined_points.shape[0],), dtype=torch.bool, device=device
+            )
+        )
 
         if combined_points.shape[0] != max_points:
             padding = torch.zeros(
                 (max_points - combined_points.shape[0], 3), dtype=dtype, device=device
             )
             combined_points = torch.cat([combined_points, padding], dim=0)
-            mask_padding = torch.zeros((padding.shape[0],), dtype=torch.bool, device=device)
+            mask_padding = torch.zeros(
+                (padding.shape[0],), dtype=torch.bool, device=device
+            )
             combined_mask = torch.cat([combined_mask, mask_padding], dim=0)
 
         if combined_points.shape[0] > 0:
@@ -574,7 +600,7 @@ def downsample_point_cloud_with_mask(
     enable_outlier_removal: bool = True,
     outlier_removal_method: str = "object_center_distance",
     distance_threshold_factor: float = 2.5,
-    min_object_points_for_outlier_removal: int = 50
+    min_object_points_for_outlier_removal: int = 50,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Downsample point cloud and corresponding mask using stratified sampling.
@@ -602,7 +628,7 @@ def downsample_point_cloud_with_mask(
             mask_padding = np.zeros(padding_size, dtype=object_mask.dtype)
             return (
                 np.vstack([point_cloud_with_rgb, pc_padding]),
-                np.concatenate([object_mask, mask_padding])
+                np.concatenate([object_mask, mask_padding]),
             )
         return point_cloud_with_rgb, object_mask
 
@@ -613,7 +639,7 @@ def downsample_point_cloud_with_mask(
             object_mask,
             method=outlier_removal_method,
             distance_threshold_factor=distance_threshold_factor,
-            min_object_points=min_object_points_for_outlier_removal
+            min_object_points=min_object_points_for_outlier_removal,
         )
 
         # Update num_points after outlier removal
@@ -623,11 +649,13 @@ def downsample_point_cloud_with_mask(
         if num_points <= max_points:
             if num_points < max_points:
                 padding_size = max_points - num_points
-                pc_padding = np.zeros((padding_size, 6), dtype=point_cloud_with_rgb.dtype)
+                pc_padding = np.zeros(
+                    (padding_size, 6), dtype=point_cloud_with_rgb.dtype
+                )
                 mask_padding = np.zeros(padding_size, dtype=object_mask.dtype)
                 return (
                     np.vstack([point_cloud_with_rgb, pc_padding]),
-                    np.concatenate([object_mask, mask_padding])
+                    np.concatenate([object_mask, mask_padding]),
                 )
             return point_cloud_with_rgb, object_mask
 
@@ -642,9 +670,11 @@ def downsample_point_cloud_with_mask(
 
     # Sample indices
     selected_indices = sample_stratified_indices(
-        object_indices, background_indices,
-        target_object_points, target_background_points,
-        max_points
+        object_indices,
+        background_indices,
+        target_object_points,
+        target_background_points,
+        max_points,
     )
 
     return point_cloud_with_rgb[selected_indices], object_mask[selected_indices]
@@ -655,7 +685,7 @@ def sample_stratified_indices(
     background_indices: np.ndarray,
     target_object_points: int,
     target_background_points: int,
-    max_points: int
+    max_points: int,
 ) -> np.ndarray:
     """
     Sample indices using stratified sampling strategy.
@@ -702,7 +732,7 @@ def sample_stratified_indices(
             additional = np.random.choice(
                 unused_indices,
                 min(remaining_points, len(unused_indices)),
-                replace=False
+                replace=False,
             )
             selected_indices = np.concatenate([selected_indices, additional])
 
@@ -715,7 +745,7 @@ def crop_point_cloud_to_objects_with_mask(
     point_cloud_with_rgb: np.ndarray,
     object_mask: np.ndarray,
     instance_mask: np.ndarray,
-    camera
+    camera,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Crop point cloud and corresponding object mask to focus on object regions.
@@ -730,7 +760,9 @@ def crop_point_cloud_to_objects_with_mask(
         Tuple[np.ndarray, np.ndarray]: (Cropped point cloud, Cropped object mask)
     """
     # Crop point cloud using instance mask
-    cropped_pc, crop_indices = crop_point_cloud_to_objects(point_cloud_with_rgb, instance_mask, camera)
+    cropped_pc, crop_indices = crop_point_cloud_to_objects(
+        point_cloud_with_rgb, instance_mask, camera
+    )
 
     # Apply the same crop indices to the object mask
     if len(object_mask) == len(point_cloud_with_rgb):
@@ -738,5 +770,7 @@ def crop_point_cloud_to_objects_with_mask(
         return cropped_pc, cropped_object_mask
     else:
         # If original mask size didn't match, create new default mask
-        print(f"Warning: Object mask size ({len(object_mask)}) doesn't match point cloud size ({len(point_cloud_with_rgb)})")
+        print(
+            f"Warning: Object mask size ({len(object_mask)}) doesn't match point cloud size ({len(point_cloud_with_rgb)})"
+        )
         return cropped_pc, np.zeros(len(cropped_pc), dtype=bool)

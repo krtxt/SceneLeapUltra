@@ -1,10 +1,8 @@
 import pytest
 from omegaconf import OmegaConf
 
-from models.decoder.dit_config_validation import (
-    validate_dit_config,
-    DiTConfigValidationError,
-)
+from models.decoder.dit_config_validation import (DiTConfigValidationError,
+                                                  validate_dit_config)
 
 
 def _build_minimal_cfg():

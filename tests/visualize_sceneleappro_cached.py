@@ -27,14 +27,15 @@ SceneLeapProDatasetCached 可视化测试脚本
 - RGB坐标轴：世界坐标系参考
 """
 
+import logging
 import os
 import sys
-import torch
+import time
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 import open3d as o3d
-import time
-import logging
-from typing import Optional, Tuple, Dict, Any
+import torch
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -44,7 +45,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 try:
-    from datasets.sceneleappro_cached import SceneLeapProDatasetCached, ForMatchSceneLeapProDatasetCached
+    from datasets.sceneleappro_cached import (
+        ForMatchSceneLeapProDatasetCached, SceneLeapProDatasetCached)
     from datasets.sceneleappro_dataset import SceneLeapProDataset
     from utils.hand_model_origin import HandModel, HandModelType
 except ImportError as e:

@@ -5,11 +5,12 @@ This module provides various ODE integration methods for sampling from
 Flow Matching models, including fixed-step and adaptive methods.
 """
 
-import torch
-import torch.nn as nn
-from typing import Dict, Optional, Tuple, Callable, Any
 import logging
 import time
+from typing import Any, Callable, Dict, Optional, Tuple
+
+import torch
+import torch.nn as nn
 
 
 class ODESolverStats:

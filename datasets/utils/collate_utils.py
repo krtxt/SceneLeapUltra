@@ -5,64 +5,73 @@ This module provides reusable functions for tensor padding, batch collation,
 and device/dtype inference to eliminate code duplication in dataset collate_fn methods.
 """
 
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple
+
 import torch
+
 from .dataset_config import CONFIG
 
 
-def infer_batch_dtype_device(batch: List[Dict[str, Any]]) -> Tuple[torch.dtype, torch.device]:
+def infer_batch_dtype_device(
+    batch: List[Dict[str, Any]]
+) -> Tuple[torch.dtype, torch.device]:
     """
     Infer dtype and device from a batch of data items.
-    
+
     Searches through all tensor values in the batch to find a reference
     tensor with non-zero elements to determine the appropriate dtype and device.
-    
+
     Args:
         batch: List of data dictionaries
-        
+
     Returns:
         Tuple[torch.dtype, torch.device]: Inferred dtype and device
     """
     fallback_dtype = CONFIG.DEFAULT_DTYPE
     fallback_device = torch.device(CONFIG.DEFAULT_DEVICE)
-    
+
     for item_dict in batch:
         for val in item_dict.values():
             if isinstance(val, torch.Tensor) and val.numel() > 0:
                 return val.dtype, val.device
-    
+
     return fallback_dtype, fallback_device
 
 
-def pad_tensor_batch(tensors: List[torch.Tensor], target_shape: Tuple[int, ...], 
-                    padding_value: float = 0.0) -> torch.Tensor:
+def pad_tensor_batch(
+    tensors: List[torch.Tensor],
+    target_shape: Tuple[int, ...],
+    padding_value: float = 0.0,
+) -> torch.Tensor:
     """
     Pad a list of tensors to the same shape and stack them.
-    
+
     Args:
         tensors: List of tensors to pad and stack
         target_shape: Target shape for padding (excluding batch dimension)
         padding_value: Value to use for padding
-        
+
     Returns:
         torch.Tensor: Stacked tensor with shape (batch_size, *target_shape)
     """
     if not tensors:
         return torch.empty(0)
-    
+
     # Get reference tensor for dtype and device
     ref_tensor = tensors[0]
     dtype = ref_tensor.dtype
     device = ref_tensor.device
-    
+
     padded_tensors = []
     for tensor in tensors:
         if tensor.shape == target_shape:
             padded_tensors.append(tensor)
         else:
             # Create padding tensor
-            padding_tensor = torch.full(target_shape, padding_value, dtype=dtype, device=device)
-            
+            padding_tensor = torch.full(
+                target_shape, padding_value, dtype=dtype, device=device
+            )
+
             # Copy original data to the beginning of padding tensor
             if tensor.numel() > 0:
                 # Handle different dimensionalities
@@ -77,29 +86,33 @@ def pad_tensor_batch(tensors: List[torch.Tensor], target_shape: Tuple[int, ...],
                     min_d0 = min(tensor.shape[0], target_shape[0])
                     min_d1 = min(tensor.shape[1], target_shape[1])
                     min_d2 = min(tensor.shape[2], target_shape[2])
-                    padding_tensor[:min_d0, :min_d1, :min_d2] = tensor[:min_d0, :min_d1, :min_d2]
-            
+                    padding_tensor[:min_d0, :min_d1, :min_d2] = tensor[
+                        :min_d0, :min_d1, :min_d2
+                    ]
+
             padded_tensors.append(padding_tensor)
-    
+
     return torch.stack(padded_tensors)
 
 
-def collate_variable_length_tensors(tensors: List[Optional[torch.Tensor]], 
-                                  expected_suffix_shape: Tuple[int, ...],
-                                  fallback_dtype: torch.dtype = None,
-                                  fallback_device: torch.device = None) -> torch.Tensor:
+def collate_variable_length_tensors(
+    tensors: List[Optional[torch.Tensor]],
+    expected_suffix_shape: Tuple[int, ...],
+    fallback_dtype: torch.dtype = None,
+    fallback_device: torch.device = None,
+) -> torch.Tensor:
     """
     Collate tensors with variable first dimension but fixed suffix dimensions.
-    
+
     This function handles the common pattern in SceneLeapPro datasets where
     tensors have shape (N, *suffix_shape) with variable N but fixed suffix.
-    
+
     Args:
         tensors: List of tensors with shape (N_i, *suffix_shape) or None
         expected_suffix_shape: Expected shape for all dimensions except the first
         fallback_dtype: Fallback dtype if no valid tensors found
         fallback_device: Fallback device if no valid tensors found
-        
+
     Returns:
         torch.Tensor: Collated tensor with shape (batch_size, max_N, *suffix_shape)
     """
@@ -107,26 +120,28 @@ def collate_variable_length_tensors(tensors: List[Optional[torch.Tensor]],
         fallback_dtype = CONFIG.DEFAULT_DTYPE
     if fallback_device is None:
         fallback_device = torch.device(CONFIG.DEFAULT_DEVICE)
-    
+
     # Filter valid tensors and find max first dimension
     valid_tensors = []
     max_n = 0
-    
+
     for tensor in tensors:
-        if (isinstance(tensor, torch.Tensor) and 
-            tensor.ndim == len(expected_suffix_shape) + 1 and
-            tensor.shape[1:] == expected_suffix_shape):
+        if (
+            isinstance(tensor, torch.Tensor)
+            and tensor.ndim == len(expected_suffix_shape) + 1
+            and tensor.shape[1:] == expected_suffix_shape
+        ):
             valid_tensors.append(tensor)
             max_n = max(max_n, tensor.shape[0])
         else:
             valid_tensors.append(None)
-    
+
     # Handle empty case
     if max_n == 0:
         batch_size = len(tensors)
         empty_shape = (batch_size, 0, *expected_suffix_shape)
         return torch.empty(empty_shape, dtype=fallback_dtype, device=fallback_device)
-    
+
     # Pad tensors to max_n
     padded_tensors = []
     for i, tensor in enumerate(valid_tensors):
@@ -137,82 +152,88 @@ def collate_variable_length_tensors(tensors: List[Optional[torch.Tensor]],
             else:
                 # Pad to max_n
                 padding_shape = (max_n - current_n, *expected_suffix_shape)
-                padding = torch.zeros(padding_shape, dtype=tensor.dtype, device=tensor.device)
+                padding = torch.zeros(
+                    padding_shape, dtype=tensor.dtype, device=tensor.device
+                )
                 padded_tensor = torch.cat([tensor, padding], dim=0)
                 padded_tensors.append(padded_tensor)
         else:
             # Create zero tensor with max_n size
             zero_shape = (max_n, *expected_suffix_shape)
-            zero_tensor = torch.zeros(zero_shape, dtype=fallback_dtype, device=fallback_device)
+            zero_tensor = torch.zeros(
+                zero_shape, dtype=fallback_dtype, device=fallback_device
+            )
             padded_tensors.append(zero_tensor)
-    
+
     return torch.stack(padded_tensors)
 
 
 def collate_batch_data(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     General collation function for SceneLeapPro dataset batches.
-    
+
     Handles special cases for 'hand_model_pose' and 'se3' tensors with variable
     first dimensions, while using standard collation for other fields.
-    
+
     Args:
         batch: List of data dictionaries from dataset
-        
+
     Returns:
         Dict[str, Any]: Collated batch data
     """
     if not batch:
         return {}
-    
+
     # Filter out invalid items
     batch = [item for item in batch if isinstance(item, dict)]
     if not batch:
         return {}
-    
+
     # Infer fallback dtype and device
     fallback_dtype, fallback_device = infer_batch_dtype_device(batch)
-    
+
     # Get all keys from batch
     all_keys = set()
     for item_dict in batch:
         all_keys.update(item_dict.keys())
-    
+
     collated_output = {}
-    
+
     for key in all_keys:
         current_key_items = [item_dict.get(key) for item_dict in batch]
-        
-        if key == 'hand_model_pose':
+
+        if key == "hand_model_pose":
             # Handle variable-length hand poses: (N, 23) -> (batch_size, max_N, 23)
             collated_output[key] = collate_variable_length_tensors(
-                current_key_items, 
+                current_key_items,
                 CONFIG.BATCH_POSE_SHAPE_SUFFIX,
-                fallback_dtype, 
-                fallback_device
+                fallback_dtype,
+                fallback_device,
             )
-            
-        elif key == 'se3':
+
+        elif key == "se3":
             # Handle variable-length SE3 matrices: (N, 4, 4) -> (batch_size, max_N, 4, 4)
             collated_output[key] = collate_variable_length_tensors(
                 current_key_items,
                 CONFIG.SE3_MATRIX_SHAPE,
                 fallback_dtype,
-                fallback_device
+                fallback_device,
             )
-            
+
         elif key in CONFIG.COLLATE_LIST_KEYS:
             # Keep these as lists
             collated_output[key] = current_key_items
-            
+
         else:
             # Use default PyTorch collation for other keys
             try:
-                collated_output[key] = torch.utils.data.dataloader.default_collate(current_key_items)
+                collated_output[key] = torch.utils.data.dataloader.default_collate(
+                    current_key_items
+                )
             except (RuntimeError, TypeError, AttributeError):
                 # Fallback to list if default collation fails
                 collated_output[key] = current_key_items
-    
+
     return collated_output
 
 
@@ -248,7 +269,7 @@ class BatchCollator:
 
         # Determine a general dtype and device from the batch for fallback
         fallback_dtype = torch.float32
-        fallback_device = 'cpu'
+        fallback_device = "cpu"
 
         for item_dict in batch:
             found_ref = False
@@ -270,7 +291,7 @@ class BatchCollator:
         for key in all_keys:
             current_key_items = [item_dict.get(key) for item_dict in batch]
 
-            if key == 'scene_pc':
+            if key == "scene_pc":
                 # Stack scene_pc tensors for batch processing
                 try:
                     # Try to stack scene_pc tensors (should work if all have same shape)
@@ -278,36 +299,30 @@ class BatchCollator:
                 except RuntimeError:
                     # If stacking fails due to different shapes, use padding
                     collated_output[key] = torch.nn.utils.rnn.pad_sequence(
-                        current_key_items,
-                        batch_first=True,
-                        padding_value=0
+                        current_key_items, batch_first=True, padding_value=0
                     )
 
-            elif key == 'hand_model_pose':
+            elif key == "hand_model_pose":
                 # Stack hand_model_pose tensors for batch processing
                 try:
                     collated_output[key] = torch.stack(current_key_items)
                 except RuntimeError:
                     # If stacking fails, use padding
                     collated_output[key] = torch.nn.utils.rnn.pad_sequence(
-                        current_key_items,
-                        batch_first=True,
-                        padding_value=0
+                        current_key_items, batch_first=True, padding_value=0
                     )
 
-            elif key == 'se3':
+            elif key == "se3":
                 # Stack SE3 transformation matrices
                 try:
                     collated_output[key] = torch.stack(current_key_items)
                 except RuntimeError:
                     # If stacking fails, use padding
                     collated_output[key] = torch.nn.utils.rnn.pad_sequence(
-                        current_key_items,
-                        batch_first=True,
-                        padding_value=0
+                        current_key_items, batch_first=True, padding_value=0
                     )
 
-            elif key in ['positive_prompt', 'negative_prompts', 'error']:
+            elif key in ["positive_prompt", "negative_prompts", "error"]:
                 # Keep text fields as lists - this preserves the correct structure
                 # negative_prompts will be: [[sample1_negs], [sample2_negs], ...]
                 # which is the correct format for TextEncoder.encode_negative
@@ -316,7 +331,9 @@ class BatchCollator:
             else:
                 # Default collation for other keys
                 try:
-                    collated_output[key] = torch.utils.data.dataloader.default_collate(current_key_items)
+                    collated_output[key] = torch.utils.data.dataloader.default_collate(
+                        current_key_items
+                    )
                 except (RuntimeError, TypeError, AttributeError):
                     collated_output[key] = current_key_items  # Fallback to list
 
@@ -347,7 +364,7 @@ class BatchCollator:
 
         # Determine a general dtype and device from the batch for fallback padding
         fallback_dtype = torch.float32
-        fallback_device = 'cpu'
+        fallback_device = "cpu"
 
         for item_dict in batch:
             found_ref = False
@@ -369,17 +386,20 @@ class BatchCollator:
         for key in all_keys:
             current_key_items = [item_dict.get(key) for item_dict in batch]
 
-            if key == 'hand_model_pose':  # Target: (batch_size, max_N, 23)
+            if key == "hand_model_pose":  # Target: (batch_size, max_N, 23)
                 max_n = 0
                 for t in current_key_items:
-                    if isinstance(t, torch.Tensor) and t.ndim == 2 and t.shape[1] == 23:
+                    if (isinstance(t, torch.Tensor) and t.ndim == 2 
+                        and t.shape[1] == 23):
                         max_n = max(max_n, t.shape[0])
 
                 padded_tensors = []
                 for t in current_key_items:
                     item_dtype = fallback_dtype
                     item_device = fallback_device
-                    if isinstance(t, torch.Tensor):  # Handles valid tensors and empty tensors e.g. (0,23)
+                    if isinstance(
+                        t, torch.Tensor
+                    ):  # Handles valid tensors and empty tensors e.g. (0,23)
                         item_dtype = t.dtype
                         item_device = t.device
 
@@ -389,22 +409,35 @@ class BatchCollator:
                             padded_tensors.append(t)
                         else:  # num_grasps < max_n
                             padding_size = max_n - num_grasps
-                            padding = torch.zeros((padding_size, 23), dtype=item_dtype, device=item_device)
+                            padding = torch.zeros(
+                                (padding_size, 23), dtype=item_dtype, device=item_device
+                            )
                             padded_tensors.append(torch.cat([t, padding], dim=0))
                     else:  # t is None, or not a tensor, or wrong shape. Pad to max_n.
-                        padded_tensors.append(torch.zeros((max_n, 23), dtype=item_dtype, device=item_device))
+                        padded_tensors.append(
+                            torch.zeros(
+                                (max_n, 23), dtype=item_dtype, device=item_device
+                            )
+                        )
 
                 if padded_tensors:
                     collated_output[key] = torch.stack(padded_tensors)
-                elif batch:  # Only if batch was non-empty but all items for key resulted in no tensors for max_n=0
-                    collated_output[key] = torch.empty((len(batch), 0, 23), dtype=fallback_dtype, device=fallback_device)
+                elif (
+                    batch
+                ):  # Only if batch was non-empty but all items for key resulted in no tensors for max_n=0
+                    collated_output[key] = torch.empty(
+                        (len(batch), 0, 23),
+                        dtype=fallback_dtype,
+                        device=fallback_device,
+                    )
                 else:  # batch is empty
                     collated_output[key] = torch.empty(0)
 
-            elif key == 'se3':  # Target: (batch_size, max_N, 4, 4)
+            elif key == "se3":  # Target: (batch_size, max_N, 4, 4)
                 max_n = 0
                 for t in current_key_items:
-                    if isinstance(t, torch.Tensor) and t.ndim == 3 and t.shape[1:] == (4, 4):
+                    if (isinstance(t, torch.Tensor) and t.ndim == 3 
+                        and t.shape[1:] == (4, 4)):
                         max_n = max(max_n, t.shape[0])
 
                 padded_tensors = []
@@ -415,46 +448,61 @@ class BatchCollator:
                         item_dtype = t.dtype
                         item_device = t.device
 
-                    if isinstance(t, torch.Tensor) and t.ndim == 3 and t.shape[1:] == (4, 4):
+                    if (isinstance(t, torch.Tensor) and t.ndim == 3 
+                        and t.shape[1:] == (4, 4)):
                         num_grasps = t.shape[0]
                         if num_grasps == max_n:
                             padded_tensors.append(t)
                         else:  # num_grasps < max_n
                             padding_size = max_n - num_grasps
-                            padding = torch.zeros((padding_size, 4, 4), dtype=item_dtype, device=item_device)
+                            padding = torch.zeros(
+                                (padding_size, 4, 4),
+                                dtype=item_dtype,
+                                device=item_device,
+                            )
                             padded_tensors.append(torch.cat([t, padding], dim=0))
                     else:  # t is None, or not a tensor, or wrong shape. Pad to max_n.
-                        padded_tensors.append(torch.zeros((max_n, 4, 4), dtype=item_dtype, device=item_device))
+                        padded_tensors.append(
+                            torch.zeros(
+                                (max_n, 4, 4), dtype=item_dtype, device=item_device
+                            )
+                        )
 
                 if padded_tensors:
                     collated_output[key] = torch.stack(padded_tensors)
                 elif batch:
-                     collated_output[key] = torch.empty((len(batch), 0, 4, 4), dtype=fallback_dtype, device=fallback_device)
+                    collated_output[key] = torch.empty(
+                        (len(batch), 0, 4, 4),
+                        dtype=fallback_dtype,
+                        device=fallback_device,
+                    )
                 else:  # batch is empty
                     collated_output[key] = torch.empty(0)
 
-            elif key in ['obj_verts', 'obj_faces', 'positive_prompt', 'negative_prompts', 'error']:
+            elif key in ["obj_verts", "obj_faces", "positive_prompt", 
+                        "negative_prompts", "error"]:
                 collated_output[key] = current_key_items  # Keep as list
 
-            elif key == 'scene_pc':  # Stack scene_pc tensors for batch processing
+            elif key == "scene_pc":  # Stack scene_pc tensors for batch processing
                 try:
                     # Try to stack scene_pc tensors (should work if all have same shape)
                     collated_output[key] = torch.stack(current_key_items)
                 except RuntimeError:
                     # If stacking fails due to different shapes, use padding
                     collated_output[key] = torch.nn.utils.rnn.pad_sequence(
-                        current_key_items,
-                        batch_first=True,
-                        padding_value=0
+                        current_key_items, batch_first=True, padding_value=0
                     )
 
-            elif key in ['obj_code', 'scene_id', 'category_id_from_object_index', 'depth_view_index']:
+            elif key in ["obj_code", "scene_id", "category_id_from_object_index", 
+                        "depth_view_index"]:
                 # ID fields - keep as list for metadata
                 collated_output[key] = current_key_items  # Keep as list
 
             else:  # Default collation for other keys
                 try:
-                    collated_output[key] = torch.utils.data.dataloader.default_collate(current_key_items)
+                    collated_output[key] = torch.utils.data.dataloader.default_collate(
+                        current_key_items
+                    )
                 except (RuntimeError, TypeError, AttributeError):
                     collated_output[key] = current_key_items  # Fallback to list
 

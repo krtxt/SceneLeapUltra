@@ -1,7 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import torch.nn as nn
-from functools import partial
 import copy
+from functools import partial
+
+import torch.nn as nn
 
 
 class BatchNormDim1Swap(nn.BatchNorm1d):

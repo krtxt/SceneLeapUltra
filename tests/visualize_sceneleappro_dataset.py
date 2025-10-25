@@ -27,16 +27,18 @@
 
 import os
 import sys
-import torch
+from typing import Optional, Tuple
+
 import numpy as np
 import open3d as o3d
-from typing import Optional, Tuple
+import torch
 
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from datasets.sceneleappro_dataset import SceneLeapProDataset
 from utils.hand_model_origin import HandModel, HandModelType
+
 
 def create_coordinate_frame(size: float = 0.1) -> o3d.geometry.TriangleMesh:
     """创建坐标轴参考框架"""

@@ -6,23 +6,16 @@ from torch.utils.data import Dataset
 
 from .utils.collate_utils import collate_batch_data
 from .utils.data_processing_utils import load_objectcentric_hand_pose_data
-from .utils.grasp_sampling_utils import (
-    generate_exhaustive_chunks,
-    sample_grasps_from_available,
-    sample_indices_from_available,
-)
+from .utils.grasp_sampling_utils import (generate_exhaustive_chunks,
+                                         sample_grasps_from_available,
+                                         sample_indices_from_available)
 from .utils.io_utils import load_object_mesh
-from .utils.pointcloud_utils import (
-    create_table_plane,
-    sample_points_from_mesh_separated,
-)
-from .utils.transform_utils import (
-    apply_object_pose_to_vertices,
-    center_hand_poses_xy,
-    center_points_xy,
-    create_se3_matrices_from_pose_batch,
-    reorder_hand_pose_batch,
-)
+from .utils.pointcloud_utils import (create_table_plane,
+                                     sample_points_from_mesh_separated)
+from .utils.transform_utils import (apply_object_pose_to_vertices,
+                                    center_hand_poses_xy, center_points_xy,
+                                    create_se3_matrices_from_pose_batch,
+                                    reorder_hand_pose_batch)
 
 
 class ObjectCentricGraspDataset(Dataset):

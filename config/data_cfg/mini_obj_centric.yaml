@@ -4,7 +4,7 @@ mode: object_centric  # 固定为object_centric模式
 train:
   succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapUltra/data/1022_mini_succ_collect
   obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
-  use_cached: false
+  use_cached: true
   cache_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/cache/objectcentric
   cache_version: v1.0_objectcentric_mini
   cache_mode: train
@@ -23,7 +23,7 @@ train:
 val:
   succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapUltra/data/1025_mini_succ_collect_test
   obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
-  use_cached: false
+  use_cached: true
   cache_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/cache/objectcentric
   cache_version: v1.0_objectcentric_mini
   cache_mode: val
@@ -42,7 +42,7 @@ val:
 test:
   succ_grasp_dir: /home/xiantuo/source/grasp/SceneLeapUltra/data/1025_mini_succ_collect_test
   obj_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/object/objaverse_v1/flat_models
-  use_cached: false
+  use_cached: true
   cache_root_dir: /home/xiantuo/source/grasp/SceneLeapPro/data/cache/objectcentric
   cache_version: v1.0_objectcentric_mini
   cache_mode: test

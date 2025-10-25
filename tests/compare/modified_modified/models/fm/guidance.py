@@ -5,10 +5,11 @@ This module implements stabilized CFG specifically designed for
 Flow Matching models, addressing issues like off-manifold drift.
 """
 
+import logging
+from typing import Callable, Dict, Optional
+
 import torch
 import torch.nn as nn
-from typing import Dict, Optional, Callable
-import logging
 
 
 def apply_cfg_basic(

@@ -4,7 +4,8 @@ from __future__ import annotations
 Physics/geometry energy calculation module.
 """
 
-from typing import TYPE_CHECKING, Tuple, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
+
 import torch
 from torchsdf import compute_sdf
 
@@ -298,7 +299,8 @@ class HandPhysics:
             f"but got {hand_pose.shape[1]}."
 
         # Use slice constants
-        from utils.hand_constants import TRANSLATION_SLICE, QPOS_SLICE, ROTATION_SLICE
+        from utils.hand_constants import (QPOS_SLICE, ROTATION_SLICE,
+                                          TRANSLATION_SLICE)
 
         global_translation = hand_pose[:, TRANSLATION_SLICE]
         qpos = hand_pose[:, QPOS_SLICE]
@@ -316,6 +318,7 @@ class HandPhysics:
             global_rotation = axis_angle_to_matrix(rotation_params)
         elif rot_type == 'euler':
             from pytorch3d.transforms import euler_angles_to_matrix
+
             # Assume "XYZ" convention for Euler angles
             global_rotation = euler_angles_to_matrix(rotation_params, convention="XYZ")
 

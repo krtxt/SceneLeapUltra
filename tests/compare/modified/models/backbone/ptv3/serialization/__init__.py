@@ -6,11 +6,5 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from .default import (
-    decode,
-    encode,
-    hilbert_decode,
-    hilbert_encode,
-    z_order_decode,
-    z_order_encode,
-)
+from .default import (decode, encode, hilbert_decode, hilbert_encode,
+                      z_order_decode, z_order_encode)

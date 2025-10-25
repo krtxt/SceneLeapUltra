@@ -5,17 +5,16 @@ This module provides utility functions for data processing operations
 including data index building, validation, and batch processing.
 """
 
-import os
 import json
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
-from typing import List, Dict, Any, Optional, Tuple
 
-from .transform_utils import (
-    transform_hand_poses_to_object_centric_frame,
-    revert_leap_qpos_static,
-    validate_hand_pose_data
-)
+from .transform_utils import (revert_leap_qpos_static,
+                              transform_hand_poses_to_object_centric_frame,
+                              validate_hand_pose_data)
 
 
 def build_data_index(

@@ -21,8 +21,11 @@ from .dit import (
     DiTValidationError, DiTInputError, DiTDimensionError,
     DiTDeviceError, DiTConditioningError, DiTGracefulFallback
 )
+from .dit_utils import adjust_backbone_config, init_weights
+from .dit_conditioning import prepare_scene_features
 from models.backbone import build_backbone
 from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
+from .dit_conditioning import ensure_text_encoder, prepare_text_features
 
 
 class ContinuousTimeEmbedding(nn.Module):
@@ -143,6 +146,10 @@ class DiTFM(nn.Module):
         # Attention optimization config (pass-through to DiT blocks)
         self.use_flash_attention = getattr(cfg, 'use_flash_attention', False)
         self.attention_chunk_size = getattr(cfg, 'attention_chunk_size', 512)
+        
+        # Attention dropout config (for regularization)
+        self.attention_dropout = getattr(cfg, 'attention_dropout', 0.0)
+        self.cross_attention_dropout = getattr(cfg, 'cross_attention_dropout', 0.0)
 
         # Core components
         self.grasp_tokenizer = GraspTokenizer(self.d_x, self.d_model)
@@ -183,6 +190,8 @@ class DiTFM(nn.Module):
                 time_embed_dim=self.time_embed_dim if self.use_adaptive_norm else None,
                 chunk_size=self.attention_chunk_size,
                 use_flash_attention=self.use_flash_attention,
+                attention_dropout=self.attention_dropout,
+                cross_attention_dropout=self.cross_attention_dropout,
             )
             for _ in range(self.num_layers)
         ])
@@ -190,13 +199,23 @@ class DiTFM(nn.Module):
         # Output projections for different modes
         self.output_projection = OutputProjection(self.d_model, self.d_x)
         
+        # Velocity head config
+        self.velocity_head_use_layer_norm = getattr(cfg, 'velocity_head_use_layer_norm', False)
+        
         # Separate heads for different prediction targets
         if self.pred_mode == 'velocity':
-            self.velocity_head = nn.Linear(self.d_model, self.d_x)
-            self.logger.info("Initialized velocity head for Flow Matching")
+            if self.velocity_head_use_layer_norm:
+                self.velocity_head = nn.Sequential(
+                    nn.LayerNorm(self.d_model),
+                    nn.Linear(self.d_model, self.d_x)
+                )
+                self.logger.info("Initialized velocity head with LayerNorm for Flow Matching")
+            else:
+                self.velocity_head = nn.Linear(self.d_model, self.d_x)
+                self.logger.info("Initialized velocity head (Linear) for Flow Matching")
         
         # Conditioning modules (reuse from DiT)
-        backbone_cfg = self._adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
+        backbone_cfg = adjust_backbone_config(cfg.backbone, cfg.use_rgb, cfg.use_object_mask)
         self.scene_model = build_backbone(backbone_cfg)
         
         # Scene feature projection to match model dimension
@@ -214,14 +233,16 @@ class DiTFM(nn.Module):
         )
         
         # Initialize weights
-        self._init_weights()
+        init_weights(self)
 
         # Zero-init velocity head for stable FM training (ensures near-zero initial field)
         if self.pred_mode == 'velocity' and hasattr(self, 'velocity_head'):
-            if hasattr(self.velocity_head, 'weight') and self.velocity_head.weight is not None:
-                nn.init.zeros_(self.velocity_head.weight)
-            if hasattr(self.velocity_head, 'bias') and self.velocity_head.bias is not None:
-                nn.init.zeros_(self.velocity_head.bias)
+            # 支持 Linear 或 Sequential(LN+Linear)
+            linear_module = self.velocity_head[-1] if isinstance(self.velocity_head, nn.Sequential) else self.velocity_head
+            if hasattr(linear_module, 'weight') and linear_module.weight is not None:
+                nn.init.zeros_(linear_module.weight)
+            if hasattr(linear_module, 'bias') and linear_module.bias is not None:
+                nn.init.zeros_(linear_module.bias)
         
         self.logger.info(f"DiTFM initialized in pred_mode: {self.pred_mode}, "
                         f"continuous_time: {self.continuous_time}")
@@ -272,14 +293,23 @@ class DiTFM(nn.Module):
         # Get conditioning features
         scene_context = data.get('scene_cond')  # [B, N, d_model]
         text_context = data.get('text_cond')  # [B, d_model] or None
+        scene_mask = data.get('scene_mask', None)  # [B, N] - mask for scene padding
         
         if text_context is not None and text_context.dim() == 2:
             text_context = text_context.unsqueeze(1)  # [B, 1, d_model]
         
+        # Ensure scene_mask is on the correct device
+        if scene_mask is not None:
+            if not isinstance(scene_mask, torch.Tensor):
+                self.logger.warning(f"scene_mask is not a tensor ({type(scene_mask)}), ignoring")
+                scene_mask = None
+            elif scene_mask.device != self._get_device():
+                scene_mask = scene_mask.to(self._get_device())
+        
         # Apply DiT blocks
         x = grasp_tokens
         for i, block in enumerate(self.dit_blocks):
-            x = block(x, time_emb, scene_context, text_context)
+            x = block(x, time_emb, scene_context, text_context, scene_mask=scene_mask)
             
             if self.debug_check_nan and torch.isnan(x).any():
                 self.logger.error(f"NaN detected after DiT block {i}")
@@ -365,120 +395,42 @@ class DiTFM(nn.Module):
         
         self.logger.debug(f"[DiTFM] {name}: {stats}")
     
-    def _init_weights(self):
-        """Initialize model weights."""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.LayerNorm):
-                if module.weight is not None:
-                    nn.init.ones_(module.weight)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
     
-    def _adjust_backbone_config(self, backbone_cfg, use_rgb, use_object_mask):
-        """
-        Adjust backbone config based on input modalities.
-        Supports PointNet2 and PTv3 backbones.
-        """
-        import copy
-        from omegaconf import OmegaConf
-        adjusted_cfg = copy.deepcopy(backbone_cfg)
-        
-        # Calculate feature input dimensions
-        feature_input_dim = (3 if use_rgb else 0) + (1 if use_object_mask else 0)
-        
-        backbone_name = getattr(adjusted_cfg, 'name', '').lower()
-        
-        if backbone_name == 'pointnet2':
-            if hasattr(adjusted_cfg, 'layer1') and hasattr(adjusted_cfg.layer1, 'mlp_list'):
-                mlp_list = list(adjusted_cfg.layer1.mlp_list)
-                mlp_list[0] = feature_input_dim
-                adjusted_cfg.layer1.mlp_list = mlp_list
-        elif backbone_name == 'ptv3':
-            # For PTv3: store feature dimension for validation/logging
-            # Actual feature handling is done dynamically in PTV3Backbone.forward
-            # Temporarily disable struct mode to add new field
-            OmegaConf.set_struct(adjusted_cfg, False)
-            adjusted_cfg.input_feature_dim = feature_input_dim
-            OmegaConf.set_struct(adjusted_cfg, True)
-            self.logger.debug(
-                f"PTv3 backbone configured: use_rgb={use_rgb}, "
-                f"use_object_mask={use_object_mask}, feature_dim={feature_input_dim}"
-            )
-        
-        return adjusted_cfg
     
     def _prepare_scene_features(self, data: Dict) -> torch.Tensor:
-        """Process scene point cloud through backbone."""
-        scene_pc = data['scene_pc']
-        
-        if not self.use_rgb:
-            scene_pc = scene_pc[..., :3]
-        
-        if self.use_object_mask and 'object_mask' in data:
-            object_mask = data['object_mask']
-            if object_mask.dim() == 2:
-                object_mask = object_mask.unsqueeze(-1)
-            scene_points = torch.cat([scene_pc, object_mask], dim=-1)
-        else:
-            scene_points = scene_pc
-        
-        _, scene_feat = self.scene_model(scene_points)
-        scene_feat = scene_feat.permute(0, 2, 1).contiguous()
-        scene_feat = self.scene_projection(scene_feat)
-        
-        return scene_feat
+        model_device = self._get_device()
+        return prepare_scene_features(
+            scene_model=self.scene_model,
+            scene_projection=self.scene_projection,
+            data=data,
+            use_rgb=self.use_rgb,
+            use_object_mask=self.use_object_mask,
+            device=model_device,
+            logger=self.logger,
+            strict=True,
+        )
     
     def _prepare_text_features(self, data: Dict, scene_feat: torch.Tensor) -> Dict:
         """Process text prompts through text encoder."""
         self._ensure_text_encoder()
-        
-        batch_size = scene_feat.shape[0] if scene_feat is not None else 1
-        positive_prompts = data['positive_prompt']
-        
-        # Encode positive prompts
-        pos_text_features = self.text_encoder.encode_positive(positive_prompts)
-        
-        # Encode negative prompts if available
-        neg_text_features = None
-        if self.use_negative_prompts and 'negative_prompts' in data:
-            neg_text_features = self.text_encoder.encode_negative(data['negative_prompts'])
-        
-        # Text dropout mask
-        text_mask = torch.ones(batch_size, 1, device=self._get_device())
-        if self.training:
-            text_mask = torch.bernoulli(
-                torch.full((batch_size, 1), 1.0 - self.text_dropout_prob,
-                          device=self._get_device())
-            )
-        
-        # Process through text processor
-        scene_embedding = torch.mean(scene_feat, dim=1) if scene_feat is not None else None
-        pos_text_features_out, neg_pred = self.text_processor(
-            pos_text_features, neg_text_features, scene_embedding
+        device = self._get_device()
+        return prepare_text_features(
+            text_encoder=self.text_encoder,
+            text_processor=self.text_processor,
+            data=data,
+            scene_feat=scene_feat,
+            use_negative_prompts=self.use_negative_prompts,
+            text_dropout_prob=self.text_dropout_prob,
+            training=self.training,
+            device=device,
+            logger=self.logger,
         )
-        
-        result = {
-            'text_cond': pos_text_features_out * text_mask,
-            'text_mask': text_mask
-        }
-        
-        if self.use_negative_prompts:
-            result['neg_pred'] = neg_pred
-            result['neg_text_features'] = neg_text_features
-        
-        return result
     
     def _ensure_text_encoder(self):
         """Lazily initialize text encoder."""
         if self.text_encoder is None:
             device = self._get_device()
-            self.text_encoder = PosNegTextEncoder(device=device)
-            self.text_encoder.to(device)
-            self.logger.info(f"Text encoder lazily initialized on {device}")
+            self.text_encoder = ensure_text_encoder(self.text_encoder, device, logger=self.logger)
     
     def _get_device(self):
         """Get model device."""

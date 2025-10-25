@@ -3,8 +3,8 @@ from typing import Dict
 
 import torch
 import torch.nn.functional as F
-from torch.functional import Tensor
 from pytorch3d.loss import chamfer_distance
+from torch.functional import Tensor
 
 # ==================== Utility Functions ====================
 

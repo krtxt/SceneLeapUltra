@@ -24,7 +24,9 @@ def compute_rotation_matrix_from_ortho6d(poses):
         # 多抓取格式：[B, num_grasps, 6] -> [B, num_grasps, 3, 3]
         return _compute_rotation_matrix_from_ortho6d_3d(poses)
     else:
-        raise ValueError(f"Unsupported poses dimension: {poses.dim()}. Expected 2 or 3.")
+        raise ValueError(
+            f"Unsupported poses dimension: {poses.dim()}. Expected 2 or 3."
+        )
 
 
 def _compute_rotation_matrix_from_ortho6d_2d(poses):
@@ -52,7 +54,9 @@ def _compute_rotation_matrix_from_ortho6d_3d(poses):
     poses_flat = poses.view(B * num_grasps, 6)  # [B*num_grasps, 6]
 
     # 使用2D版本进行计算
-    matrices_flat = _compute_rotation_matrix_from_ortho6d_2d(poses_flat)  # [B*num_grasps, 3, 3]
+    matrices_flat = _compute_rotation_matrix_from_ortho6d_2d(
+        poses_flat
+    )  # [B*num_grasps, 3, 3]
 
     # 重塑回多抓取格式
     matrices = matrices_flat.view(B, num_grasps, 3, 3)  # [B, num_grasps, 3, 3]
@@ -81,7 +85,9 @@ def robust_compute_rotation_matrix_from_ortho6d(poses):
         # 多抓取格式：[B, num_grasps, 6] -> [B, num_grasps, 3, 3]
         return _robust_compute_rotation_matrix_from_ortho6d_3d(poses)
     else:
-        raise ValueError(f"Unsupported poses dimension: {poses.dim()}. Expected 2 or 3.")
+        raise ValueError(
+            f"Unsupported poses dimension: {poses.dim()}. Expected 2 or 3."
+        )
 
 
 def _robust_compute_rotation_matrix_from_ortho6d_2d(poses):
@@ -116,7 +122,9 @@ def _robust_compute_rotation_matrix_from_ortho6d_3d(poses):
     poses_flat = poses.view(B * num_grasps, 6)  # [B*num_grasps, 6]
 
     # 使用2D版本进行计算
-    matrices_flat = _robust_compute_rotation_matrix_from_ortho6d_2d(poses_flat)  # [B*num_grasps, 3, 3]
+    matrices_flat = _robust_compute_rotation_matrix_from_ortho6d_2d(
+        poses_flat
+    )  # [B*num_grasps, 3, 3]
 
     # 重塑回多抓取格式
     matrices = matrices_flat.view(B, num_grasps, 3, 3)  # [B, num_grasps, 3, 3]

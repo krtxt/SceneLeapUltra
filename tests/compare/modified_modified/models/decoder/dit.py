@@ -1,27 +1,32 @@
+import logging
+import math
+from typing import Any, Dict, Optional, Sequence, Tuple
+
 import torch
 import torch.nn as nn
-import math
-import logging
-from typing import Dict, Optional, Any, Tuple, Sequence
+
 try:
     import numpy as np
 except ImportError:  # pragma: no cover - numpy should be available but guard anyway
     np = None
-from einops import rearrange
 from contextlib import nullcontext
 
-from models.utils.diffusion_utils import timestep_embedding
+from einops import rearrange
+
 from models.backbone import build_backbone
-from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
-from .dit_config_validation import validate_dit_config, get_dit_config_summary
-from .dit_validation import (
-    validate_dit_inputs, DiTValidationError, DiTInputError, DiTDimensionError,
-    DiTDeviceError, DiTConditioningError, DiTGracefulFallback
-)
-from .dit_memory_optimization import (
-    MemoryMonitor, EfficientAttention, GradientCheckpointedDiTBlock,
-    BatchProcessor, optimize_memory_usage, get_memory_optimization_config
-)
+from models.utils.diffusion_utils import timestep_embedding
+from models.utils.text_encoder import PosNegTextEncoder, TextConditionProcessor
+
+from .dit_config_validation import get_dit_config_summary, validate_dit_config
+from .dit_memory_optimization import (BatchProcessor, EfficientAttention,
+                                      GradientCheckpointedDiTBlock,
+                                      MemoryMonitor,
+                                      get_memory_optimization_config,
+                                      optimize_memory_usage)
+from .dit_validation import (DiTConditioningError, DiTDeviceError,
+                             DiTDimensionError, DiTGracefulFallback,
+                             DiTInputError, DiTValidationError,
+                             validate_dit_inputs)
 
 
 def _convert_to_tensor(

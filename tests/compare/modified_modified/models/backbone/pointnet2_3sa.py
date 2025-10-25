@@ -1,11 +1,13 @@
 import sys
+
 sys.path.append("./third_party/pointnet2/")
 
+import unittest
+
+import torch
 import torch.nn as nn
 from pointnet2_modules import PointnetSAModuleVotes
 from torch.functional import Tensor
-import torch
-import unittest
 
 
 class Pointnet2Backbone_3sa(nn.Module):

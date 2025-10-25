@@ -1,9 +1,11 @@
+import logging
 import os
+
 import torch
 import torch.nn as nn
-import logging
 
 from . import pointops
+
 
 class PointTransformerLayer(nn.Module):
     def __init__(self, in_planes, out_planes, share_planes=8, nsample=16):

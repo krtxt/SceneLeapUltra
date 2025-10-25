@@ -3,7 +3,7 @@ import os
 import pathlib
 from collections import defaultdict
 from enum import Enum, auto
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import plotly.graph_objects as go
@@ -11,10 +11,8 @@ import pytorch_kinematics as pk
 import torch
 import transforms3d
 import trimesh as tm
-from typing import Tuple
 from urdf_parser_py.urdf import Box, Mesh, Robot, Sphere
 
-from utils.path_utils import get_assets_folder
 from utils.leap_hand_info import (
     LEAP_HAND_CONTACT_POINTS_PATH,
     LEAP_HAND_DEFAULT_JOINT_ANGLES,
@@ -27,10 +25,9 @@ from utils.leap_hand_info import (
     LEAP_HAND_PENETRATION_POINTS_PATH,
     LEAP_HAND_URDF_PATH,
 )
-from utils.rot6d import (
-    robust_compute_rotation_matrix_from_ortho6d,
-)
+from utils.path_utils import get_assets_folder
 from utils.point_utils import transform_points
+from utils.rot6d import robust_compute_rotation_matrix_from_ortho6d
 
 
 class HandModelType(Enum):
@@ -574,18 +571,21 @@ class HandModel:
         assert len(hand_pose.shape) <= 2
         if len(hand_pose.shape) == 1:
             hand_pose = hand_pose.unsqueeze(0)
-        assert hand_pose.shape[1] == 3 + 4 + self.n_dofs, f"手部姿态形状错误: 期望 {3 + 4 + self.n_dofs}, 实际 {hand_pose.shape[1]}"
+        assert (
+            hand_pose.shape[1] == 3 + 4 + self.n_dofs
+        ), f"手部姿态形状错误: 期望 {3 + 4 + self.n_dofs}, 实际 {hand_pose.shape[1]}"
 
         self.hand_pose = hand_pose
         if self.hand_pose.requires_grad:
             self.hand_pose.retain_grad()
         self.global_translation = self.hand_pose[:, 0:3]
-        
+
         # 使用pytorch3d将四元数转换为旋转矩阵
         from pytorch3d.transforms import quaternion_to_matrix
+
         quaternion = self.hand_pose[:, 3:7]
         self.global_rotation = quaternion_to_matrix(quaternion)
-        
+
         self.current_status = self.chain.forward_kinematics(self.hand_pose[:, 7:])
         if contact_point_indices is not None:
             self.contact_point_indices = contact_point_indices
@@ -645,9 +645,7 @@ class HandModel:
             x_local = x_local.reshape(-1, 3)  # (total_batch_size * num_samples, 3)
             if "radius" not in self.mesh[link_name]:
                 # Hide the import to avoid breaking the code if kaolin is not installed
-                from kaolin.metrics.trianglemesh import (
-                    compute_sdf,
-                )
+                from kaolin.metrics.trianglemesh import compute_sdf
 
                 assert (
                     "face_verts" in self.mesh[link_name]

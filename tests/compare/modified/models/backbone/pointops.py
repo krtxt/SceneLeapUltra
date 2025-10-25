@@ -1,10 +1,9 @@
 from typing import Tuple
 
-import torch
-from torch.autograd import Function
-import torch.nn as nn
-
 import pointops_cuda
+import torch
+import torch.nn as nn
+from torch.autograd import Function
 
 
 class FurthestSampling(Function):

@@ -12,14 +12,17 @@ from urdf_parser_py.urdf import Box, Mesh, Robot, Sphere
 
 try:
     from pytorch3d.ops import knn_points
+    from pytorch3d.ops import \
+        sample_farthest_points as pytorch3d_sample_farthest_points
+    from pytorch3d.ops import \
+        sample_points_from_meshes as pytorch3d_sample_points_from_meshes
     from pytorch3d.structures import Meshes as PyTorch3DMeshes
-    from pytorch3d.ops import sample_points_from_meshes as pytorch3d_sample_points_from_meshes
-    from pytorch3d.ops import sample_farthest_points as pytorch3d_sample_farthest_points
     _PYTORCH3D_AVAILABLE = True
 except ImportError:
     _PYTORCH3D_AVAILABLE = False
 
 from torchsdf import index_vertices_by_faces
+
 from utils.path_utils import get_assets_folder
 
 

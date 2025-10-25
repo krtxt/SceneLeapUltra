@@ -4,11 +4,13 @@
 """
 import json
 import os
-from pathlib import Path
 from collections import defaultdict
-import numpy as np
-import matplotlib.pyplot as plt
+from pathlib import Path
+
 import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+
 matplotlib.use('Agg')  # 使用非交互式后端
 
 def collect_grasp_statistics(dataset_path):

@@ -1,53 +1,35 @@
-import os
 import json
-import torch
-from torch.utils.data import Dataset
-import numpy as np
-import cv2
-from pytorch3d.transforms import (quaternion_to_matrix, matrix_to_quaternion)
-from typing import Optional, List, Dict, Any, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
-from .utils.common_utils import (
-    create_point_cloud_from_depth_image,
-    CameraInfo
-)
-from .utils.io_utils import (
-    load_object_mesh,
-    load_scene_images
-)
-from .utils.pointcloud_utils import (
-    add_rgb_to_pointcloud,
-    map_2d_mask_to_3d_pointcloud,
-    downsample_point_cloud_with_mask,
-    crop_point_cloud_to_objects_with_mask
-)
-from .utils.mask_utils import (
-    extract_object_mask
-)
-from .utils.transform_utils import (
-    create_se3_matrix_from_pose,
-    extract_object_name_from_code,
-    generate_negative_prompts,
-    get_camera_transform,
-    get_specific_hand_pose
-)
-from .utils.error_utils import (
-    log_dataset_warning,
-    handle_loading_exception
-)
-from .utils.data_processing_utils import (
-    build_data_index,
-    load_and_process_hand_pose_data,
-    load_scene_metadata,
-    validate_dataset_configuration,
-    collate_batch_data,
-    collate_variable_grasps_batch,
-    get_depth_view_indices_from_scene
-)
-from .utils.coordinate_transform_strategies import (
-    TransformationData,
-    create_transform_strategy
-)
+import cv2
+import numpy as np
+import torch
+from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_matrix
+from torch.utils.data import Dataset
+
+from .utils.common_utils import CameraInfo, create_point_cloud_from_depth_image
+from .utils.coordinate_transform_strategies import (TransformationData,
+                                                    create_transform_strategy)
+from .utils.data_processing_utils import (build_data_index, collate_batch_data,
+                                          collate_variable_grasps_batch,
+                                          get_depth_view_indices_from_scene,
+                                          load_and_process_hand_pose_data,
+                                          load_scene_metadata,
+                                          validate_dataset_configuration)
+from .utils.error_utils import handle_loading_exception, log_dataset_warning
+from .utils.io_utils import load_object_mesh, load_scene_images
+from .utils.mask_utils import extract_object_mask
+from .utils.pointcloud_utils import (add_rgb_to_pointcloud,
+                                     crop_point_cloud_to_objects_with_mask,
+                                     downsample_point_cloud_with_mask,
+                                     map_2d_mask_to_3d_pointcloud)
+from .utils.transform_utils import (create_se3_matrix_from_pose,
+                                    extract_object_name_from_code,
+                                    generate_negative_prompts,
+                                    get_camera_transform,
+                                    get_specific_hand_pose)
+
 
 class _BaseLeapProDataset(Dataset):
     """

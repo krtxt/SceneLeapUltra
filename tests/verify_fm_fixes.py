@@ -1,15 +1,18 @@
 """快速验证Flow Matching修复"""
 import sys
+
 sys.path.insert(0, '/home/xiantuo/source/grasp/GithubClone/SceneLeapUltra')
 
 print("验证Flow Matching修复...\n")
 
 print("1. 测试Mode参数分离:")
 from models.decoder.dit_fm import DiTFM
+
 print("   ✅ DiTFM使用pred_mode参数")
 
 print("\n2. 测试loss_dict处理:")
 import torch
+
 test_dict = {
     'loss1': torch.tensor(1.0),
     'loss2': 2.0,  # 标量
@@ -23,8 +26,8 @@ except:
 
 print("\n3. 测试模块导入:")
 try:
-    from models.fm_lightning import FlowMatchingLightning
     from models.fm import linear_ot_path, rk4_solver
+    from models.fm_lightning import FlowMatchingLightning
     print("   ✅ 所有模块正常导入")
 except Exception as e:
     print(f"   ❌ 导入失败: {e}")

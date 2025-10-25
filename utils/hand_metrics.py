@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+
 import torch
 
 from .hand_constants import QPOS_SLICE, SELF_PENETRATION_POINT_RADIUS
@@ -11,7 +12,9 @@ class HandMetrics:
     def __init__(self, hand_model: "HandModel"):
         """Initialize with hand model."""
         if hand_model.hand_pose is None:
-            raise ValueError("Hand model not posed. Call set_parameters or __call__ first.")
+            raise ValueError(
+                "Hand model not posed. Call set_parameters or __call__ first."
+            )
         self.hand_model = hand_model
 
     def cal_self_penetration_energy(self) -> torch.Tensor:
@@ -72,12 +75,10 @@ class HandMetrics:
         hm = self.hand_model
         joint_angles = hm.hand_pose[:, QPOS_SLICE]
         joint_limit_energy = torch.sum(
-            (joint_angles > hm.joints_upper)
-            * (joint_angles - hm.joints_upper),
+            (joint_angles > hm.joints_upper) * (joint_angles - hm.joints_upper),
             dim=-1,
         ) + torch.sum(
-            (joint_angles < hm.joints_lower)
-            * (hm.joints_lower - joint_angles),
+            (joint_angles < hm.joints_lower) * (hm.joints_lower - joint_angles),
             dim=-1,
         )
         return joint_limit_energy
@@ -163,4 +164,4 @@ class HandMetrics:
         penetration = -penetration
         assert penetration.shape == (B, N)
 
-        return penetration.sum(-1) 
+        return penetration.sum(-1)

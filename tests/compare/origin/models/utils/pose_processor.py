@@ -1,8 +1,9 @@
 from typing import Dict, Tuple
+
 import torch
 
-from utils.hand_model import HandModel
 from utils.hand_helper import denorm_hand_pose_robust
+from utils.hand_model import HandModel
 
 # Define slice constants for pose components
 TRANSLATION_SLICE = slice(0, 3)

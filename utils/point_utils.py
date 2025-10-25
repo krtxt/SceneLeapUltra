@@ -1,6 +1,7 @@
+from typing import Tuple, Union
+
 import numpy as np
 import torch
-from typing import Union, Tuple
 
 
 def transform_point(T: np.ndarray, point: np.ndarray) -> np.ndarray:
@@ -44,7 +45,10 @@ def transform_points(T: np.ndarray, points: np.ndarray) -> np.ndarray:
 
 # ==================== 多抓取批量变换函数 ====================
 
-def transform_points_batch_numpy(transforms: np.ndarray, points: np.ndarray) -> np.ndarray:
+
+def transform_points_batch_numpy(
+    transforms: np.ndarray, points: np.ndarray
+) -> np.ndarray:
     """
     批量变换点云（NumPy版本）
     支持单变换多点云和多变换多点云
@@ -71,7 +75,9 @@ def transform_points_batch_numpy(transforms: np.ndarray, points: np.ndarray) -> 
     elif transforms.ndim == 3 and points.ndim == 3:
         # 多变换多点云: [B,4,4] × [B,N,3] -> [B,N,3]
         B, N, _ = points.shape
-        assert transforms.shape[0] == B, f"Batch size mismatch: {transforms.shape[0]} vs {B}"
+        assert (
+            transforms.shape[0] == B
+        ), f"Batch size mismatch: {transforms.shape[0]} vs {B}"
         transformed = np.zeros_like(points)
         for b in range(B):
             transformed[b] = transform_points(transforms[b], points[b])
@@ -81,7 +87,9 @@ def transform_points_batch_numpy(transforms: np.ndarray, points: np.ndarray) -> 
         # 多抓取变换: [B,num_grasps,4,4] × [B,N,3] -> [B,num_grasps,N,3]
         B, num_grasps, _, _ = transforms.shape
         _, N, _ = points.shape
-        assert transforms.shape[0] == B, f"Batch size mismatch: {transforms.shape[0]} vs {B}"
+        assert (
+            transforms.shape[0] == B
+        ), f"Batch size mismatch: {transforms.shape[0]} vs {B}"
 
         transformed = np.zeros((B, num_grasps, N, 3))
         for b in range(B):
@@ -90,10 +98,14 @@ def transform_points_batch_numpy(transforms: np.ndarray, points: np.ndarray) -> 
         return transformed
 
     else:
-        raise ValueError(f"Unsupported dimensions: transforms {transforms.shape}, points {points.shape}")
+        raise ValueError(
+            f"Unsupported dimensions: transforms {transforms.shape}, points {points.shape}"
+        )
 
 
-def transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+def transform_points_batch_torch(
+    transforms: torch.Tensor, points: torch.Tensor
+) -> torch.Tensor:
     """
     批量变换点云（PyTorch版本）
     支持单变换多点云和多变换多点云，GPU加速
@@ -126,7 +138,9 @@ def transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor)
         _, N, _ = points.shape
 
         # 扩展点云到多抓取维度
-        points_expanded = points.unsqueeze(1).expand(-1, num_grasps, -1, -1).contiguous()  # [B,num_grasps,N,3]
+        points_expanded = (
+            points.unsqueeze(1).expand(-1, num_grasps, -1, -1).contiguous()
+        )  # [B,num_grasps,N,3]
 
         # 重塑为批量处理
         transforms_flat = transforms.view(B * num_grasps, 4, 4)  # [B*num_grasps,4,4]
@@ -140,10 +154,14 @@ def transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor)
         return transformed
 
     else:
-        raise ValueError(f"Unsupported dimensions: transforms {transforms.shape}, points {points.shape}")
+        raise ValueError(
+            f"Unsupported dimensions: transforms {transforms.shape}, points {points.shape}"
+        )
 
 
-def _transform_points_single_torch(T: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+def _transform_points_single_torch(
+    T: torch.Tensor, points: torch.Tensor
+) -> torch.Tensor:
     """PyTorch单变换实现"""
     # points: [N, 3], T: [4, 4]
     rotation = T[:3, :3]  # [3, 3]
@@ -154,7 +172,9 @@ def _transform_points_single_torch(T: torch.Tensor, points: torch.Tensor) -> tor
     return transformed
 
 
-def _transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor) -> torch.Tensor:
+def _transform_points_batch_torch(
+    transforms: torch.Tensor, points: torch.Tensor
+) -> torch.Tensor:
     """PyTorch批量变换实现"""
     # transforms: [B, 4, 4], points: [B, N, 3]
     B, N, _ = points.shape
@@ -163,7 +183,9 @@ def _transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor
     translation = transforms[:, :3, 3]  # [B, 3]
 
     # 批量矩阵乘法: [B, 3, 3] @ [B, 3, N] -> [B, 3, N]
-    transformed = torch.bmm(rotation, points.transpose(1, 2)).transpose(1, 2)  # [B, N, 3]
+    transformed = torch.bmm(rotation, points.transpose(1, 2)).transpose(
+        1, 2
+    )  # [B, N, 3]
     transformed = transformed + translation.unsqueeze(1)  # [B, N, 3]
 
     return transformed
@@ -171,8 +193,10 @@ def _transform_points_batch_torch(transforms: torch.Tensor, points: torch.Tensor
 
 # ==================== 统一接口函数 ====================
 
-def transform_points_multi_grasp(transforms: Union[np.ndarray, torch.Tensor],
-                                points: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+
+def transform_points_multi_grasp(
+    transforms: Union[np.ndarray, torch.Tensor], points: Union[np.ndarray, torch.Tensor]
+) -> Union[np.ndarray, torch.Tensor]:
     """
     多抓取点云变换统一接口
     自动检测输入类型并调用对应的实现
@@ -194,10 +218,13 @@ def transform_points_multi_grasp(transforms: Union[np.ndarray, torch.Tensor],
     elif isinstance(transforms, torch.Tensor) and isinstance(points, torch.Tensor):
         return transform_points_batch_torch(transforms, points)
     else:
-        raise TypeError("transforms and points must be both numpy arrays or both torch tensors")
+        raise TypeError(
+            "transforms and points must be both numpy arrays or both torch tensors"
+        )
 
 
 # ==================== 点云采样和网格生成 ====================
+
 
 def get_points_in_grid(
     lb: np.ndarray,
@@ -234,7 +261,7 @@ def get_points_in_grid(
 def get_points_in_grid_batch(
     bounds: Union[np.ndarray, torch.Tensor],
     num_pts: Tuple[int, int, int],
-    batch_size: int = 1
+    batch_size: int = 1,
 ) -> Union[np.ndarray, torch.Tensor]:
     """
     批量生成网格点，支持多个边界框
@@ -292,8 +319,11 @@ def get_points_in_grid_batch(
 
 # ==================== 点云处理工具函数 ====================
 
-def apply_se3_to_points(se3_matrices: Union[np.ndarray, torch.Tensor],
-                       points: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+
+def apply_se3_to_points(
+    se3_matrices: Union[np.ndarray, torch.Tensor],
+    points: Union[np.ndarray, torch.Tensor],
+) -> Union[np.ndarray, torch.Tensor]:
     """
     应用SE(3)变换到点云，支持多抓取格式
 
@@ -312,8 +342,9 @@ def apply_se3_to_points(se3_matrices: Union[np.ndarray, torch.Tensor],
     return transform_points_multi_grasp(se3_matrices, points)
 
 
-def compute_point_distances(points1: Union[np.ndarray, torch.Tensor],
-                          points2: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+def compute_point_distances(
+    points1: Union[np.ndarray, torch.Tensor], points2: Union[np.ndarray, torch.Tensor]
+) -> Union[np.ndarray, torch.Tensor]:
     """
     计算两组点云之间的距离，支持批量处理
 
@@ -329,15 +360,19 @@ def compute_point_distances(points1: Union[np.ndarray, torch.Tensor],
     elif isinstance(points1, torch.Tensor) and isinstance(points2, torch.Tensor):
         return _compute_point_distances_torch(points1, points2)
     else:
-        raise TypeError("points1 and points2 must be both numpy arrays or both torch tensors")
+        raise TypeError(
+            "points1 and points2 must be both numpy arrays or both torch tensors"
+        )
 
 
-def _compute_point_distances_numpy(points1: np.ndarray, points2: np.ndarray) -> np.ndarray:
+def _compute_point_distances_numpy(
+    points1: np.ndarray, points2: np.ndarray
+) -> np.ndarray:
     """NumPy版本的点距离计算"""
     if points1.ndim == 2 and points2.ndim == 2:
         # 单点云距离: [N1, 3] × [N2, 3] -> [N1, N2]
         diff = points1[:, None, :] - points2[None, :, :]  # [N1, N2, 3]
-        distances = np.sqrt(np.sum(diff ** 2, axis=-1))  # [N1, N2]
+        distances = np.sqrt(np.sum(diff**2, axis=-1))  # [N1, N2]
         return distances
 
     elif points1.ndim == 3 and points2.ndim == 3:
@@ -346,34 +381,42 @@ def _compute_point_distances_numpy(points1: np.ndarray, points2: np.ndarray) -> 
         _, N2, _ = points2.shape
 
         diff = points1[:, :, None, :] - points2[:, None, :, :]  # [B, N1, N2, 3]
-        distances = np.sqrt(np.sum(diff ** 2, axis=-1))  # [B, N1, N2]
+        distances = np.sqrt(np.sum(diff**2, axis=-1))  # [B, N1, N2]
         return distances
 
     else:
-        raise ValueError(f"Unsupported dimensions: points1 {points1.shape}, points2 {points2.shape}")
+        raise ValueError(
+            f"Unsupported dimensions: points1 {points1.shape}, points2 {points2.shape}"
+        )
 
 
-def _compute_point_distances_torch(points1: torch.Tensor, points2: torch.Tensor) -> torch.Tensor:
+def _compute_point_distances_torch(
+    points1: torch.Tensor, points2: torch.Tensor
+) -> torch.Tensor:
     """PyTorch版本的点距离计算"""
     if points1.dim() == 2 and points2.dim() == 2:
         # 单点云距离: [N1, 3] × [N2, 3] -> [N1, N2]
         diff = points1.unsqueeze(1) - points2.unsqueeze(0)  # [N1, N2, 3]
-        distances = torch.sqrt(torch.sum(diff ** 2, dim=-1))  # [N1, N2]
+        distances = torch.sqrt(torch.sum(diff**2, dim=-1))  # [N1, N2]
         return distances
 
     elif points1.dim() == 3 and points2.dim() == 3:
         # 批量点云距离: [B, N1, 3] × [B, N2, 3] -> [B, N1, N2]
         diff = points1.unsqueeze(2) - points2.unsqueeze(1)  # [B, N1, N2, 3]
-        distances = torch.sqrt(torch.sum(diff ** 2, dim=-1))  # [B, N1, N2]
+        distances = torch.sqrt(torch.sum(diff**2, dim=-1))  # [B, N1, N2]
         return distances
 
     else:
-        raise ValueError(f"Unsupported dimensions: points1 {points1.shape}, points2 {points2.shape}")
+        raise ValueError(
+            f"Unsupported dimensions: points1 {points1.shape}, points2 {points2.shape}"
+        )
 
 
-def sample_points_on_surface(vertices: Union[np.ndarray, torch.Tensor],
-                            faces: Union[np.ndarray, torch.Tensor],
-                            num_samples: int) -> Union[np.ndarray, torch.Tensor]:
+def sample_points_on_surface(
+    vertices: Union[np.ndarray, torch.Tensor],
+    faces: Union[np.ndarray, torch.Tensor],
+    num_samples: int,
+) -> Union[np.ndarray, torch.Tensor]:
     """
     在网格表面采样点，支持批量处理
 
@@ -394,7 +437,9 @@ def sample_points_on_surface(vertices: Union[np.ndarray, torch.Tensor],
         raise TypeError("vertices must be numpy array or torch tensor")
 
 
-def _sample_points_numpy(vertices: np.ndarray, faces: np.ndarray, num_samples: int) -> np.ndarray:
+def _sample_points_numpy(
+    vertices: np.ndarray, faces: np.ndarray, num_samples: int
+) -> np.ndarray:
     """NumPy版本的表面采样（简化实现）"""
     if vertices.ndim == 2:
         # 单网格采样
@@ -416,7 +461,9 @@ def _sample_points_numpy(vertices: np.ndarray, faces: np.ndarray, num_samples: i
         raise ValueError(f"Unsupported vertices dimension: {vertices.ndim}")
 
 
-def _sample_points_torch(vertices: torch.Tensor, faces: torch.Tensor, num_samples: int) -> torch.Tensor:
+def _sample_points_torch(
+    vertices: torch.Tensor, faces: torch.Tensor, num_samples: int
+) -> torch.Tensor:
     """PyTorch版本的表面采样（简化实现）"""
     if vertices.dim() == 2:
         # 单网格采样

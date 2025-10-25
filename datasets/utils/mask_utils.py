@@ -5,14 +5,15 @@ This module provides utility functions for mask processing, including
 instance segmentation mask extraction, object mask mapping, and mask validation.
 """
 
+from typing import Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Optional
 
 
 def extract_object_mask(
     instance_mask_image: np.ndarray,
     target_category_id: int,
-    view_specific_instance_attributes: List[Dict]
+    view_specific_instance_attributes: List[Dict],
 ) -> np.ndarray:
     """
     Extract object mask from instance segmentation image.
@@ -29,13 +30,13 @@ def extract_object_mask(
 
     # Find the mask value for the target category
     for obj_attr in view_specific_instance_attributes:
-        if obj_attr.get('category_id') == target_category_id:
-            mask_value = obj_attr.get('idx')
+        if obj_attr.get("category_id") == target_category_id:
+            mask_value = obj_attr.get("idx")
             break
 
     # Create object mask
     if mask_value is not None:
-        object_mask = (instance_mask_image == mask_value)
+        object_mask = instance_mask_image == mask_value
     else:
         object_mask = np.zeros_like(instance_mask_image, dtype=bool)
 
@@ -43,9 +44,7 @@ def extract_object_mask(
 
 
 def validate_mask_correspondence(
-    point_cloud_size: int,
-    mask_size: int,
-    operation_name: str = "mask operation"
+    point_cloud_size: int, mask_size: int, operation_name: str = "mask operation"
 ) -> bool:
     """
     Validate that mask size corresponds to point cloud size.
@@ -59,16 +58,16 @@ def validate_mask_correspondence(
         True if sizes match, False otherwise
     """
     if point_cloud_size != mask_size:
-        print(f"Warning: {operation_name} - Point cloud size ({point_cloud_size}) "
-              f"doesn't match mask size ({mask_size})")
+        print(
+            f"Warning: {operation_name} - Point cloud size ({point_cloud_size}) "
+            f"doesn't match mask size ({mask_size})"
+        )
         return False
     return True
 
 
 def resize_mask_to_match_pointcloud(
-    mask: np.ndarray,
-    target_size: int,
-    pad_value: bool = False
+    mask: np.ndarray, target_size: int, pad_value: bool = False
 ) -> np.ndarray:
     """
     Resize mask to match target point cloud size.
@@ -82,7 +81,7 @@ def resize_mask_to_match_pointcloud(
         Resized mask array
     """
     current_size = len(mask)
-    
+
     if current_size == target_size:
         return mask
     elif current_size > target_size:
@@ -116,15 +115,14 @@ def combine_object_masks(masks_2d_list: List[np.ndarray]) -> np.ndarray:
         if mask_2d.shape == combined_mask.shape:
             combined_mask |= mask_2d
         else:
-            print(f"Warning: Mask shape mismatch - {mask_2d.shape} vs {combined_mask.shape}")
+            print(
+                f"Warning: Mask shape mismatch - {mask_2d.shape} vs {combined_mask.shape}"
+            )
 
     return combined_mask
 
 
-def get_object_bounding_box(
-    mask_2d: np.ndarray,
-    padding: int = 30
-) -> tuple:
+def get_object_bounding_box(mask_2d: np.ndarray, padding: int = 30) -> tuple:
     """
     Get bounding box coordinates from 2D object mask.
 
@@ -165,7 +163,7 @@ def filter_mask_by_depth(
     mask_2d: np.ndarray,
     depth_image: np.ndarray,
     min_depth: float = 0.1,
-    max_depth: float = 10.0
+    max_depth: float = 10.0,
 ) -> np.ndarray:
     """
     Filter 2D mask based on depth constraints.
@@ -180,7 +178,9 @@ def filter_mask_by_depth(
         Filtered boolean mask
     """
     if mask_2d.shape != depth_image.shape:
-        print(f"Warning: Mask shape {mask_2d.shape} doesn't match depth shape {depth_image.shape}")
+        print(
+            f"Warning: Mask shape {mask_2d.shape} doesn't match depth shape {depth_image.shape}"
+        )
         return mask_2d
 
     # Create depth validity mask
@@ -207,20 +207,22 @@ def calculate_mask_statistics(mask: np.ndarray) -> Dict[str, float]:
     background_points = total_points - object_points
 
     stats = {
-        'total_points': total_points,
-        'object_points': int(object_points),
-        'background_points': int(background_points),
-        'object_ratio': float(object_points / total_points) if total_points > 0 else 0.0,
-        'background_ratio': float(background_points / total_points) if total_points > 0 else 0.0
+        "total_points": total_points,
+        "object_points": int(object_points),
+        "background_points": int(background_points),
+        "object_ratio": (
+            float(object_points / total_points) if total_points > 0 else 0.0
+        ),
+        "background_ratio": (
+            float(background_points / total_points) if total_points > 0 else 0.0
+        ),
     }
 
     return stats
 
 
 def apply_mask_erosion(
-    mask_2d: np.ndarray,
-    kernel_size: int = 3,
-    iterations: int = 1
+    mask_2d: np.ndarray, kernel_size: int = 3, iterations: int = 1
 ) -> np.ndarray:
     """
     Apply morphological erosion to 2D mask.
@@ -235,28 +237,26 @@ def apply_mask_erosion(
     """
     try:
         import cv2
-        
+
         # Convert to uint8 for OpenCV
         mask_uint8 = mask_2d.astype(np.uint8) * 255
-        
+
         # Create erosion kernel
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        
+
         # Apply erosion
         eroded = cv2.erode(mask_uint8, kernel, iterations=iterations)
-        
+
         # Convert back to boolean
         return eroded > 0
-        
+
     except ImportError:
         print("Warning: OpenCV not available, returning original mask")
         return mask_2d
 
 
 def apply_mask_dilation(
-    mask_2d: np.ndarray,
-    kernel_size: int = 3,
-    iterations: int = 1
+    mask_2d: np.ndarray, kernel_size: int = 3, iterations: int = 1
 ) -> np.ndarray:
     """
     Apply morphological dilation to 2D mask.
@@ -271,29 +271,25 @@ def apply_mask_dilation(
     """
     try:
         import cv2
-        
+
         # Convert to uint8 for OpenCV
         mask_uint8 = mask_2d.astype(np.uint8) * 255
-        
+
         # Create dilation kernel
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        
+
         # Apply dilation
         dilated = cv2.dilate(mask_uint8, kernel, iterations=iterations)
-        
+
         # Convert back to boolean
         return dilated > 0
-        
+
     except ImportError:
         print("Warning: OpenCV not available, returning original mask")
         return mask_2d
 
 
-def create_circular_mask(
-    center: tuple,
-    radius: int,
-    image_shape: tuple
-) -> np.ndarray:
+def create_circular_mask(center: tuple, radius: int, image_shape: tuple) -> np.ndarray:
     """
     Create a circular mask centered at given coordinates.
 
@@ -312,7 +308,7 @@ def create_circular_mask(
     y, x = np.ogrid[:height, :width]
 
     # Calculate distance from center
-    distance = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+    distance = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
 
     # Create circular mask
     mask = distance <= radius
@@ -321,8 +317,7 @@ def create_circular_mask(
 
 
 def validate_instance_attributes(
-    instance_attributes: List[Dict],
-    required_keys: List[str] = None
+    instance_attributes: List[Dict], required_keys: List[str] = None
 ) -> bool:
     """
     Validate instance attribute data structure.
@@ -335,16 +330,16 @@ def validate_instance_attributes(
         True if all attributes are valid, False otherwise
     """
     if required_keys is None:
-        required_keys = ['category_id', 'idx']
+        required_keys = ["category_id", "idx"]
 
     for attr in instance_attributes:
         if not isinstance(attr, dict):
             return False
-        
+
         for key in required_keys:
             if key not in attr:
                 return False
-            
+
             # Check for None values
             if attr[key] is None:
                 return False

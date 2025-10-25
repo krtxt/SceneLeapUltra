@@ -1,12 +1,13 @@
+import math
+from inspect import isfunction
 from typing import Dict, List, Tuple
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange, repeat
 from torch import einsum
-from einops import repeat, rearrange
-from inspect import isfunction
+
 
 def make_schedule_ddpm(timesteps: int, beta: List, beta_schedule: str, s=0.008) -> Dict:
     assert beta[0] < beta[1] < 1.0

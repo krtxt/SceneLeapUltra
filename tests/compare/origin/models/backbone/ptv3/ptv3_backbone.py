@@ -3,11 +3,12 @@ PTv3 Backbone Adapter for SceneLeapPlus
 适配PTv3模型以符合项目的backbone接口规范
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from .ptv3 import PointTransformerV3
+
 from ..pointnet2_utils import farthest_point_sample, index_points
+from .ptv3 import PointTransformerV3
 
 
 class PTv3Backbone(nn.Module):

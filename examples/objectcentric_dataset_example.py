@@ -9,14 +9,15 @@ source ~/.bashrc && conda activate DexGrasp
 python examples/objectcentric_dataset_example.py
 """
 
-import sys
 import os
+import sys
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 from torch.utils.data import DataLoader
+
 from datasets.objectcentric_grasp_dataset import ObjectCentricGraspDataset
 
 

@@ -6,11 +6,12 @@ used by the SceneLeapPro dataset classes.
 """
 
 import os
+from functools import lru_cache
+from typing import Optional, Tuple
+
 import cv2
 import torch
-from functools import lru_cache
 from pytorch3d.io import load_obj
-from typing import Optional, Tuple
 
 
 @lru_cache(maxsize=None)

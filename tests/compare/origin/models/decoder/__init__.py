@@ -3,9 +3,10 @@
 # from .vanilla_decoder import VanillaDecoder
 # from .task_decoder import GraspTaskDecoder
 # from .unet import UNetModel
-from .unet_new import UNetModel
 from .dit import DiTModel
 from .dit_config_validation import validate_dit_compatibility_with_diffuser
+from .unet_new import UNetModel
+
 
 def build_decoder(decoder_cfg, diffuser_cfg=None):
     """

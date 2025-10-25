@@ -5,8 +5,9 @@ This module provides utility functions for mask processing, including
 instance segmentation mask extraction, object mask mapping, and mask validation.
 """
 
+from typing import Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Optional
 
 
 def extract_object_mask(
@@ -235,7 +236,7 @@ def apply_mask_erosion(
     """
     try:
         import cv2
-        
+
         # Convert to uint8 for OpenCV
         mask_uint8 = mask_2d.astype(np.uint8) * 255
         
@@ -271,7 +272,7 @@ def apply_mask_dilation(
     """
     try:
         import cv2
-        
+
         # Convert to uint8 for OpenCV
         mask_uint8 = mask_2d.astype(np.uint8) * 255
         

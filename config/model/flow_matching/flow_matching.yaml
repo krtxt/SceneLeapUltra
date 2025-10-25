@@ -86,6 +86,8 @@ scheduler:
   name: cosine           # <-- 关键改动：使用余弦退火
   t_max: 1000            # <-- 设为总 epoch 数
   min_lr: 1.0e-6         # <-- 衰减到的最低学习率
+  step_size: null
+  step_gamma: null
   # (step_size 和 step_gamma 是 steplr 专用的，cosine不需要)
 
 # Debug and logging

@@ -6,6 +6,7 @@ and perform basic forward passes.
 """
 import os
 import sys
+
 import torch
 from omegaconf import OmegaConf
 
@@ -26,7 +27,7 @@ def test_ptv3_backbone_basic():
     
     try:
         from models.backbone.ptv3_backbone import PTV3Backbone
-        
+
         # Load config
         cfg_path = os.path.join(
             repo_root, "config/model/diffuser/decoder/backbone/ptv3_light.yaml"

@@ -6,9 +6,10 @@ This module implements different probability paths for Flow Matching:
 2. Diffusion path (for ablation): VP/VE schedules with analytical velocity
 """
 
-import torch
 import math
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
+import torch
 
 
 def linear_ot_path(

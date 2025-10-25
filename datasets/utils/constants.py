@@ -6,7 +6,8 @@ used across SceneLeapPro dataset implementations to improve maintainability and
 make configuration easily modifiable.
 """
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 import torch
 
 # =============================================================================
@@ -42,9 +43,9 @@ DEFAULT_MAX_POINTS = 10000
 # Valid coordinate transformation modes
 VALID_COORDINATE_MODES = [
     "object_centric",
-    "camera_centric", 
+    "camera_centric",
     "camera_centric_obj_mean_normalized",
-    "camera_centric_scene_mean_normalized"
+    "camera_centric_scene_mean_normalized",
 ]
 
 # =============================================================================
@@ -70,7 +71,7 @@ PC_XYZMASK_DIM = 4  # Point cloud XYZ+mask dimension (legacy)
 
 # Default tensor types
 DEFAULT_DTYPE = torch.float32
-DEFAULT_DEVICE = 'cpu'
+DEFAULT_DEVICE = "cpu"
 DEFAULT_LONG_DTYPE = torch.long
 DEFAULT_BOOL_DTYPE = torch.bool
 
@@ -101,32 +102,39 @@ ERROR_MESH_FACES_SHAPE = (0, 3)
 
 # Standard cache keys for training (SceneLeapPro)
 STANDARD_CACHE_KEYS = [
-    'scene_pc',
-    'hand_model_pose', 
-    'se3',
-    'positive_prompt',
-    'negative_prompts'
+    "scene_pc",
+    "hand_model_pose",
+    "se3",
+    "positive_prompt",
+    "negative_prompts",
 ]
 
 # Extended cache keys for ForMatch validation (7 fields)
-FORMATCH_VAL_CACHE_KEYS = STANDARD_CACHE_KEYS + [
-    'obj_verts',
-    'obj_faces'
-]
+FORMATCH_VAL_CACHE_KEYS = STANDARD_CACHE_KEYS + ["obj_verts", "obj_faces"]
 
 # Extended cache keys for ForMatch testing (11 fields with IDs)
 FORMATCH_TEST_CACHE_KEYS = FORMATCH_VAL_CACHE_KEYS + [
-    'scene_id',
-    'object_id', 
-    'grasp_id',
-    'object_code'
+    "scene_id",
+    "object_id",
+    "grasp_id",
+    "object_code",
 ]
 
 # All possible cache keys (for validation)
 ALL_CACHE_KEYS = [
-    'scene_pc', 'hand_model_pose', 'se3', 'positive_prompt', 'negative_prompts',
-    'object_mask', 'obj_verts', 'obj_faces', 'scene_id', 'object_id', 
-    'grasp_id', 'object_code', 'error'
+    "scene_pc",
+    "hand_model_pose",
+    "se3",
+    "positive_prompt",
+    "negative_prompts",
+    "object_mask",
+    "obj_verts",
+    "obj_faces",
+    "scene_id",
+    "object_id",
+    "grasp_id",
+    "object_code",
+    "error",
 ]
 
 # =============================================================================
@@ -153,12 +161,14 @@ MAX_NEG_PROMPTS = 20  # Maximum number of negative prompts
 
 # Cache file naming patterns
 CACHE_FILENAME_PATTERN = "{prefix}_{hash}_{mode}_{max_grasps}.h5"
-FORMATCH_CACHE_FILENAME_PATTERN = "sceneleappro_{cache_mode}_{hash}_{mode}_{max_grasps}.h5"
+FORMATCH_CACHE_FILENAME_PATTERN = (
+    "sceneleappro_{cache_mode}_{hash}_{mode}_{max_grasps}.h5"
+)
 STANDARD_CACHE_FILENAME_PATTERN = "sceneleappro_{hash}_{mode}_{max_grasps}.h5"
 
 # HDF5 configuration
-HDF5_COMPRESSION = 'gzip'  # Default compression for HDF5 datasets
-HDF5_ITEM_GROUP_PREFIX = 'item_'  # Prefix for item groups in HDF5
+HDF5_COMPRESSION = "gzip"  # Default compression for HDF5 datasets
+HDF5_ITEM_GROUP_PREFIX = "item_"  # Prefix for item groups in HDF5
 
 # =============================================================================
 # Logging and Monitoring Configuration
@@ -166,7 +176,9 @@ HDF5_ITEM_GROUP_PREFIX = 'item_'  # Prefix for item groups in HDF5
 
 # Logging levels and intervals
 CACHE_STATUS_LOG_INTERVAL = 100  # Log cache status every N items
-PERFORMANCE_LOG_THRESHOLD = 5.0  # Log performance warnings if operations take > N seconds
+PERFORMANCE_LOG_THRESHOLD = (
+    5.0  # Log performance warnings if operations take > N seconds
+)
 MEMORY_WARNING_THRESHOLD_MB = 1000  # Warn if memory usage exceeds N MB
 
 # Progress reporting
@@ -177,16 +189,17 @@ TQDM_DESCRIPTION_MAX_LENGTH = 50  # Maximum length for tqdm descriptions
 # Utility Functions for Constants
 # =============================================================================
 
+
 def get_cache_keys_for_mode(cache_mode: str) -> List[str]:
     """
     Get appropriate cache keys based on cache mode.
-    
+
     Args:
         cache_mode: Cache mode ("train", "val", or "test")
-        
+
     Returns:
         List of cache keys for the specified mode
-        
+
     Raises:
         ValueError: If cache_mode is invalid
     """
@@ -197,65 +210,71 @@ def get_cache_keys_for_mode(cache_mode: str) -> List[str]:
     elif cache_mode == "test":
         return FORMATCH_TEST_CACHE_KEYS.copy()
     else:
-        raise ValueError(f"Invalid cache_mode '{cache_mode}'. Valid modes: {VALID_CACHE_MODES}")
+        raise ValueError(
+            f"Invalid cache_mode '{cache_mode}'. Valid modes: {VALID_CACHE_MODES}"
+        )
 
 
 def get_default_error_values(num_neg_prompts: int) -> Dict[str, Any]:
     """
     Get default error values for dataset error responses.
-    
+
     Args:
         num_neg_prompts: Number of negative prompts to generate
-        
+
     Returns:
         Dictionary of default error values
     """
     return {
-        'scene_pc': torch.zeros(ERROR_SCENE_PC_SHAPE, dtype=DEFAULT_DTYPE),
-        'hand_model_pose': torch.zeros(ERROR_POSE_SHAPE, dtype=DEFAULT_DTYPE),
-        'se3': torch.zeros(ERROR_SE3_SHAPE, dtype=DEFAULT_DTYPE),
-        'positive_prompt': DEFAULT_ERROR_PROMPT,
-        'negative_prompts': [DEFAULT_EMPTY_PROMPT] * num_neg_prompts,
-        'obj_verts': torch.zeros(ERROR_MESH_VERTS_SHAPE, dtype=DEFAULT_DTYPE),
-        'obj_faces': torch.zeros(ERROR_MESH_FACES_SHAPE, dtype=DEFAULT_LONG_DTYPE)
+        "scene_pc": torch.zeros(ERROR_SCENE_PC_SHAPE, dtype=DEFAULT_DTYPE),
+        "hand_model_pose": torch.zeros(ERROR_POSE_SHAPE, dtype=DEFAULT_DTYPE),
+        "se3": torch.zeros(ERROR_SE3_SHAPE, dtype=DEFAULT_DTYPE),
+        "positive_prompt": DEFAULT_ERROR_PROMPT,
+        "negative_prompts": [DEFAULT_EMPTY_PROMPT] * num_neg_prompts,
+        "obj_verts": torch.zeros(ERROR_MESH_VERTS_SHAPE, dtype=DEFAULT_DTYPE),
+        "obj_faces": torch.zeros(ERROR_MESH_FACES_SHAPE, dtype=DEFAULT_LONG_DTYPE),
     }
 
 
 def validate_constants() -> bool:
     """
     Validate that all constants are consistent and valid.
-    
+
     Returns:
         True if all constants are valid
-        
+
     Raises:
         ValueError: If any constants are invalid
     """
     # Validate dimensions
     if POSE_DIM != POSITION_DIM + QUATERNION_DIM + JOINTS_DIM:
-        raise ValueError(f"POSE_DIM ({POSE_DIM}) must equal POSITION_DIM + QUATERNION_DIM + JOINTS_DIM")
-    
+        raise ValueError(
+            f"POSE_DIM ({POSE_DIM}) must equal POSITION_DIM + QUATERNION_DIM + JOINTS_DIM"
+        )
+
     if PC_XYZRGB_DIM != PC_XYZ_DIM + PC_RGB_DIM:
-        raise ValueError(f"PC_XYZRGB_DIM ({PC_XYZRGB_DIM}) must equal PC_XYZ_DIM + PC_RGB_DIM")
-    
+        raise ValueError(
+            f"PC_XYZRGB_DIM ({PC_XYZRGB_DIM}) must equal PC_XYZ_DIM + PC_RGB_DIM"
+        )
+
     # Validate default values
     if DEFAULT_MAX_POINTS <= 0:
         raise ValueError(f"DEFAULT_MAX_POINTS must be positive")
-    
+
     if DEFAULT_NUM_NEG_PROMPTS < 0:
         raise ValueError(f"DEFAULT_NUM_NEG_PROMPTS must be non-negative")
-    
+
     if DEFAULT_MESH_SCALE <= 0:
         raise ValueError(f"DEFAULT_MESH_SCALE must be positive")
-    
+
     # Validate cache modes
     if DEFAULT_CACHE_MODE not in VALID_CACHE_MODES:
         raise ValueError(f"DEFAULT_CACHE_MODE must be in VALID_CACHE_MODES")
-    
+
     # Validate coordinate modes
     if DEFAULT_MODE not in VALID_COORDINATE_MODES:
         raise ValueError(f"DEFAULT_MODE must be in VALID_COORDINATE_MODES")
-    
+
     return True
 
 

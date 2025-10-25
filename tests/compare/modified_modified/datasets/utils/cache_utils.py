@@ -5,24 +5,21 @@ This module provides utility functions for cache management,
 including file validation, cache path generation, and health checks.
 """
 
-import os
-import time
 import hashlib
 import logging
+import os
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
+
 import h5py
-from typing import Optional, Dict, Any, Callable, Tuple
+
+from .constants import (CACHE_CREATION_TIMEOUT, CACHE_FILE_CHECK_INTERVAL,
+                        CACHE_HEALTH_CHECK_INTERVAL,
+                        CACHE_VALIDATION_TEST_INDEX)
 from .dataset_config import CachedDatasetConfig
-from .constants import (
-    CACHE_CREATION_TIMEOUT, CACHE_FILE_CHECK_INTERVAL, CACHE_VALIDATION_TEST_INDEX,
-    CACHE_HEALTH_CHECK_INTERVAL
-)
-from .distributed_utils import (
-    is_distributed_training,
-    is_main_process,
-    distributed_barrier,
-    ensure_directory_exists,
-    should_create_cache
-)
+from .distributed_utils import (distributed_barrier, ensure_directory_exists,
+                                is_distributed_training, is_main_process,
+                                should_create_cache)
 
 
 def wait_for_file(file_path: str, timeout: int = CACHE_CREATION_TIMEOUT, check_interval: float = CACHE_FILE_CHECK_INTERVAL) -> bool:

@@ -4,11 +4,12 @@ PTv3 Backbone Wrapper for SceneLeapUltra
 Wraps the official Point Transformer V3 implementation to provide
 a unified interface compatible with PointNet2 and the decoder models.
 """
+import logging
 import sys
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-from typing import Tuple
-import logging
 
 # Import PTv3 implementation
 from .ptv3.ptv3 import PointTransformerV3

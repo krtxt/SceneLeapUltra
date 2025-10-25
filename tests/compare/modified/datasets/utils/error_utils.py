@@ -5,8 +5,9 @@ This module provides utility functions for creating error return values
 and handling dataset loading failures gracefully.
 """
 
+from typing import Any, Dict, List
+
 import torch
-from typing import Dict, Any, List
 
 
 def create_error_return_dict(

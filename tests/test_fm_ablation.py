@@ -8,15 +8,19 @@ Flow Matching 消融实验脚本
 4. CFG消融：scale ∈ {0, 1, 3, 5}
 """
 
-import torch
 import sys
 import time
+
+import torch
+
 sys.path.insert(0, '/home/xiantuo/source/grasp/GithubClone/SceneLeapUltra')
 
-from models.fm.solvers import heun_solver, rk4_solver, integrate_ode, ODESolverStats
-from models.fm.paths import linear_ot_path
-from models.fm.guidance import apply_cfg_clipped
 import math
+
+from models.fm.guidance import apply_cfg_clipped
+from models.fm.paths import linear_ot_path
+from models.fm.solvers import (ODESolverStats, heun_solver, integrate_ode,
+                               rk4_solver)
 
 
 def ablation_nfe():
@@ -196,7 +200,7 @@ def ablation_paths():
     print("消融实验5: 概率路径")
     print("="*60)
     
-    from models.fm.paths import linear_ot_path, diffusion_path_vp
+    from models.fm.paths import diffusion_path_vp, linear_ot_path
     
     B, num_grasps, D = 4, 16, 25
     x0 = torch.randn(B, num_grasps, D)

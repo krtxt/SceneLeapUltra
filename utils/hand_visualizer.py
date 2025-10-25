@@ -1,4 +1,4 @@
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import plotly.graph_objects as go
@@ -208,4 +208,4 @@ class HandVisualizer:
             v = v.detach().cpu()
             f = hm.mesh[link_name]["faces"].detach().cpu()
             data += tm.Trimesh(vertices=v, faces=f)
-        return data 
+        return data

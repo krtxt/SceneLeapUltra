@@ -4,23 +4,23 @@ from statistics import mean
 from typing import Dict, List, Tuple
 
 import numpy as np
+import pytorch3d.ops
+import pytorch3d.structures
+import pytorch3d.transforms
 import torch
-from torch import nn
 import torch.nn.functional as F
+from pytorch3d.loss import chamfer_distance
+from torch import nn
 from torch.functional import Tensor
 
-import pytorch3d.structures
-import pytorch3d.ops
-import pytorch3d.transforms
-from pytorch3d.loss import chamfer_distance
-
-from utils.hand_model import HandModel, HandModelType
-from utils.hand_helper import denorm_hand_pose_robust
-from utils.evaluate_utils import cal_q1, cal_pen
-from .matcher import Matcher
 from models.utils import loss_components
 from models.utils.grasp_evaluator import GraspMetricCalculator
 from models.utils.pose_processor import PoseProcessor
+from utils.evaluate_utils import cal_pen, cal_q1
+from utils.hand_helper import denorm_hand_pose_robust
+from utils.hand_model import HandModel, HandModelType
+
+from .matcher import Matcher
 
 
 class GraspLossPose(nn.Module):
@@ -119,6 +119,7 @@ class GraspLossPose(nn.Module):
         Determine correct device for distributed training
         """
         import os
+
         import torch
 
         # Check if in distributed training environment

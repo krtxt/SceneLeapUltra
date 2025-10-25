@@ -1,8 +1,10 @@
-from typing import Optional, Dict, Any
+import logging
+from typing import Any, Dict, Optional
+
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-import logging
+
 from . import build_datasets
 
 

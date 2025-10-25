@@ -5,14 +5,12 @@ This module provides utility functions for coordinate transformations, including
 hand pose transformations, LEAP format conversions, and SE(3) matrix operations.
 """
 
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
-from typing import Tuple, Optional
-
-from pytorch3d.transforms import (
-    quaternion_to_matrix, matrix_to_quaternion,
-    quaternion_invert, quaternion_multiply
-)
+from pytorch3d.transforms import (matrix_to_quaternion, quaternion_invert,
+                                  quaternion_multiply, quaternion_to_matrix)
 
 
 def transform_hand_poses_to_object_centric_frame(

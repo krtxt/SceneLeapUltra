@@ -10,6 +10,7 @@ This module provides memory optimization features including:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 import psutil
 import logging
@@ -17,6 +18,25 @@ from typing import Optional, Tuple, Dict, Any
 from contextlib import contextmanager
 import gc
 import math
+
+# Try to import PyTorch 2.x SDPA (Scaled Dot-Product Attention)
+# This is the recommended approach for PyTorch 2.0+
+_SDPA_AVAILABLE = False
+try:
+    # Check if scaled_dot_product_attention is available
+    if hasattr(F, 'scaled_dot_product_attention'):
+        # Test if it works (some PyTorch builds may have it but not working)
+        _test_q = torch.randn(1, 1, 1, 8)
+        _test_k = torch.randn(1, 1, 1, 8)
+        _test_v = torch.randn(1, 1, 1, 8)
+        _ = F.scaled_dot_product_attention(_test_q, _test_k, _test_v, dropout_p=0.0)
+        _SDPA_AVAILABLE = True
+        logging.info("PyTorch 2.x SDPA (scaled_dot_product_attention) is available and will be used")
+    else:
+        logging.warning("PyTorch 2.x SDPA not available. Using fallback attention implementation.")
+except Exception as e:
+    logging.warning(f"PyTorch 2.x SDPA test failed: {e}. Using fallback attention implementation.")
+    _SDPA_AVAILABLE = False
 
 
 class MemoryMonitor:
@@ -108,15 +128,22 @@ class EfficientAttention(nn.Module):
     """
     Memory-efficient attention computation for large sequence lengths.
     
-    Implements several optimization strategies:
-    - Chunked attention computation
-    - Flash attention (if available)
-    - Gradient checkpointing support
+    Implements several optimization strategies (in priority order):
+    1. PyTorch 2.x SDPA (scaled_dot_product_attention) - preferred, auto-optimized
+    2. Flash Attention 2 (if explicitly requested and available)
+    3. Chunked attention computation (for very long sequences)
+    4. Standard attention (fallback)
+    
+    Features:
+    - Automatic backend selection with PyTorch 2.x SDPA
+    - Attention probability dropout for regularization
+    - Mask support for handling padding
     """
     
     def __init__(self, d_model: int, num_heads: int, d_head: int, 
                  dropout: float = 0.1, chunk_size: int = 512,
-                 use_flash_attention: bool = False):
+                 use_flash_attention: bool = False, 
+                 attention_dropout: float = 0.0):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -125,6 +152,10 @@ class EfficientAttention(nn.Module):
         self.scale = d_head ** -0.5
         self.chunk_size = chunk_size
         self.use_flash_attention = use_flash_attention
+        self.attention_dropout = attention_dropout
+        
+        # Check if SDPA is available
+        self.use_sdpa = _SDPA_AVAILABLE
         
         self.to_q = nn.Linear(d_model, self.inner_dim, bias=False)
         self.to_k = nn.Linear(d_model, self.inner_dim, bias=False)
@@ -135,14 +166,19 @@ class EfficientAttention(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Try to import flash attention if requested
+        # Attention probability dropout (applied after softmax)
+        # Only used for non-SDPA paths (SDPA has built-in dropout support)
+        self.attn_dropout = nn.Dropout(attention_dropout) if attention_dropout > 0.0 else None
+        
+        # Try to import flash attention if explicitly requested (fallback option)
         self.flash_attn_func = None
-        if use_flash_attention:
+        if use_flash_attention and not self.use_sdpa:
             try:
                 from flash_attn import flash_attn_func
                 self.flash_attn_func = flash_attn_func
+                logging.info("Flash Attention 2 loaded as fallback (SDPA not available)")
             except ImportError:
-                logging.warning("Flash attention not available, falling back to standard attention")
+                logging.warning("Flash attention not available, using standard attention")
     
     def forward(self, query: torch.Tensor, key: Optional[torch.Tensor] = None, 
                 value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -153,7 +189,8 @@ class EfficientAttention(nn.Module):
             query: (B, seq_len_q, d_model)
             key: (B, seq_len_k, d_model) or None
             value: (B, seq_len_v, d_model) or None
-            mask: Optional attention mask
+            mask: Optional attention mask (1=valid, 0=padding)
+                  Shape: (B, seq_len_k) or (B, seq_len_q, seq_len_k)
             
         Returns:
             output: (B, seq_len_q, d_model)
@@ -166,22 +203,85 @@ class EfficientAttention(nn.Module):
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
         
-        # Use flash attention if available and sequences are long enough
+        # Priority 1: Use PyTorch 2.x SDPA (recommended)
+        if self.use_sdpa:
+            return self._sdpa_attention_forward(query, key, value, mask)
+        
+        # Priority 2: Use flash attention if available and sequences are long enough
         if (self.flash_attn_func is not None and 
             seq_len_q > 128 and seq_len_k > 128 and 
             mask is None):  # Flash attention doesn't support custom masks easily
             return self._flash_attention_forward(query, key, value)
         
-        # Use chunked attention for very long sequences
+        # Priority 3: Use chunked attention for very long sequences
         if seq_len_q > self.chunk_size or seq_len_k > self.chunk_size:
             return self._chunked_attention_forward(query, key, value, mask)
         
-        # Standard attention for smaller sequences
+        # Fallback: Standard attention for smaller sequences
         return self._standard_attention_forward(query, key, value, mask)
+    
+    def _sdpa_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
+                               value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        PyTorch 2.x SDPA (Scaled Dot-Product Attention) implementation.
+        
+        This is the preferred method when available, as it automatically selects
+        the best backend (FlashAttention 2, Memory-efficient, or Math) and provides
+        native support for dropout and masks.
+        """
+        q = self.to_q(query)
+        k = self.to_k(key)
+        v = self.to_v(value)
+        
+        # Reshape for multi-head attention: (B, seq_len, num_heads, d_head)
+        q = q.view(q.shape[0], q.shape[1], self.num_heads, self.d_head)
+        k = k.view(k.shape[0], k.shape[1], self.num_heads, self.d_head)
+        v = v.view(v.shape[0], v.shape[1], self.num_heads, self.d_head)
+        
+        # Convert mask format if provided
+        # SDPA expects: (B, num_heads, seq_len_q, seq_len_k) with True=masked, False=valid
+        # Our mask: (B, seq_len_k) or (B, seq_len_q, seq_len_k) with 1=valid, 0=padding
+        attn_mask = None
+        if mask is not None:
+            if mask.dim() == 2:
+                # (B, seq_len_k) -> (B, 1, 1, seq_len_k)
+                attn_mask = mask.unsqueeze(1).unsqueeze(1)
+            elif mask.dim() == 3:
+                # (B, seq_len_q, seq_len_k) -> (B, 1, seq_len_q, seq_len_k)
+                attn_mask = mask.unsqueeze(1)
+            
+            # Convert: 1=valid, 0=padding -> False=valid, True=masked
+            attn_mask = (attn_mask == 0)
+        
+        # Use SDPA with native dropout support
+        dropout_p = self.attention_dropout if self.training else 0.0
+        
+        # PyTorch SDPA expects (B, num_heads, seq_len, d_head) but we have (B, seq_len, num_heads, d_head)
+        # Transpose: (B, seq_len, num_heads, d_head) -> (B, num_heads, seq_len, d_head)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        
+        # Call SDPA
+        # Note: SDPA automatically calculates scale as 1/sqrt(d_head)
+        # Our self.scale = d_head ** -0.5 is the same, so we don't need to pass it
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p
+        )
+        
+        # Transpose back: (B, num_heads, seq_len, d_head) -> (B, seq_len, num_heads, d_head)
+        out = out.transpose(1, 2)
+        
+        # Reshape back to (B, seq_len, d_model)
+        out = out.contiguous().view(out.shape[0], out.shape[1], self.inner_dim)
+        
+        return self.to_out(out)
     
     def _flash_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
                                 value: torch.Tensor) -> torch.Tensor:
-        """Flash attention implementation."""
+        """Flash attention implementation with dropout support."""
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
@@ -192,7 +292,9 @@ class EfficientAttention(nn.Module):
         v = v.view(v.shape[0], v.shape[1], self.num_heads, self.d_head)
         
         # Flash attention expects (B, seq_len, num_heads, d_head)
-        out = self.flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=self.scale)
+        # Pass attention_dropout to flash attention (it handles it internally)
+        dropout_p = self.attention_dropout if self.training else 0.0
+        out = self.flash_attn_func(q, k, v, dropout_p=dropout_p, softmax_scale=self.scale)
         
         # Reshape back to (B, seq_len, d_model)
         out = out.view(out.shape[0], out.shape[1], self.inner_dim)
@@ -201,7 +303,7 @@ class EfficientAttention(nn.Module):
     
     def _chunked_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
                                   value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Chunked attention for memory efficiency with long sequences."""
+        """Chunked attention for memory efficiency with long sequences and dropout support."""
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
         
@@ -225,10 +327,23 @@ class EfficientAttention(nn.Module):
             scores = torch.einsum('bhid,bhjd->bhij', q_chunk, k) * self.scale
             
             if mask is not None:
-                mask_chunk = mask[:, i:end_i, :] if mask.dim() == 3 else mask[i:end_i, :]
+                # Handle different mask shapes
+                # Expected: mask should be broadcastable to (B, num_heads, chunk_size, seq_len_k)
+                if mask.dim() == 2:
+                    # (B, seq_len_k) -> (B, 1, 1, seq_len_k)
+                    mask_chunk = mask.unsqueeze(1).unsqueeze(1)
+                elif mask.dim() == 3:
+                    # (B, seq_len_q, seq_len_k) -> (B, 1, chunk_size, seq_len_k)
+                    mask_chunk = mask[:, i:end_i, :].unsqueeze(1)
+                else:
+                    mask_chunk = mask
                 scores = scores.masked_fill(mask_chunk == 0, -float('inf'))
             
             attn = torch.softmax(scores, dim=-1)
+            
+            # Apply attention dropout (only during training)
+            if self.attn_dropout is not None:
+                attn = self.attn_dropout(attn)
             
             # Apply attention to values
             out_chunk = torch.einsum('bhij,bhjd->bhid', attn, v)
@@ -242,7 +357,7 @@ class EfficientAttention(nn.Module):
     
     def _standard_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
                                    value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Standard attention implementation."""
+        """Standard attention implementation with dropout support."""
         from einops import rearrange
         
         B, seq_len_q, _ = query.shape
@@ -260,9 +375,21 @@ class EfficientAttention(nn.Module):
         scores = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
         
         if mask is not None:
+            # Handle different mask shapes
+            # Expected: mask should be broadcastable to (B, num_heads, seq_len_q, seq_len_k)
+            if mask.dim() == 2:
+                # (B, seq_len_k) -> (B, 1, 1, seq_len_k)
+                mask = mask.unsqueeze(1).unsqueeze(1)
+            elif mask.dim() == 3:
+                # (B, seq_len_q, seq_len_k) -> (B, 1, seq_len_q, seq_len_k)
+                mask = mask.unsqueeze(1)
             scores = scores.masked_fill(mask == 0, -float('inf'))
         
         attn = torch.softmax(scores, dim=-1)
+        
+        # Apply attention dropout (only during training)
+        if self.attn_dropout is not None:
+            attn = self.attn_dropout(attn)
         
         # Apply attention to values
         out = torch.einsum('bhij,bhjd->bhid', attn, v)
@@ -283,24 +410,26 @@ class GradientCheckpointedDiTBlock(nn.Module):
     
     def forward(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
                 scene_context: Optional[torch.Tensor] = None, 
-                text_context: Optional[torch.Tensor] = None) -> torch.Tensor:
+                text_context: Optional[torch.Tensor] = None,
+                scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Forward pass with optional gradient checkpointing.
         """
         if self.use_checkpointing and self.training:
             return checkpoint.checkpoint(
                 self._forward_impl,
-                x, time_emb, scene_context, text_context,
+                x, time_emb, scene_context, text_context, scene_mask,
                 use_reentrant=False
             )
         else:
-            return self._forward_impl(x, time_emb, scene_context, text_context)
+            return self._forward_impl(x, time_emb, scene_context, text_context, scene_mask)
     
     def _forward_impl(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
                      scene_context: Optional[torch.Tensor] = None, 
-                     text_context: Optional[torch.Tensor] = None) -> torch.Tensor:
+                     text_context: Optional[torch.Tensor] = None,
+                     scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Actual forward implementation."""
-        return self.dit_block(x, time_emb, scene_context, text_context)
+        return self.dit_block(x, time_emb, scene_context, text_context, scene_mask)
 
 
 class BatchProcessor:

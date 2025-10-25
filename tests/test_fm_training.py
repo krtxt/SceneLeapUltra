@@ -4,9 +4,11 @@ Flow Matching 训练循环测试
 测试FM训练的完整流程，验证1个epoch无NaN/Inf
 """
 
-import torch
-import sys
 import os
+import sys
+
+import torch
+
 sys.path.insert(0, '/home/xiantuo/source/grasp/GithubClone/SceneLeapUltra')
 
 def test_fm_training_loop():
@@ -26,12 +28,13 @@ def test_fm_training_loop():
     print("="*60)
     
     try:
+        import torch.nn.functional as F
         from omegaconf import OmegaConf
+
         from models.decoder.dit_fm import DiTFM
         from models.fm.paths import linear_ot_path
         from utils.hand_helper import process_hand_pose
-        import torch.nn.functional as F
-        
+
         # 检查GPU
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"\n使用设备: {device}")
@@ -169,7 +172,7 @@ def test_fm_sampling():
     print("="*60)
     
     try:
-        from models.fm.solvers import rk4_solver, ODESolverStats
+        from models.fm.solvers import ODESolverStats, rk4_solver
         
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"\n使用设备: {device}")

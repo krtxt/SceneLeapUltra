@@ -1,10 +1,11 @@
+import json
 import math
+
 import numpy as np
-import torch
 import pytorch3d.transforms as transforms
+import torch
 import torch.nn.functional as F
 from pytorchse3.se3 import se3_log_map
-import json
 
 JSON_STATS_FILE_PATH = "assets/formatch_overall_hand_pose_dimension_statistics_by_mode.json"
 POSE_STATS = None

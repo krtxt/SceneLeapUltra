@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+
 import torch
 
 from .hand_constants import QPOS_SLICE, SELF_PENETRATION_POINT_RADIUS

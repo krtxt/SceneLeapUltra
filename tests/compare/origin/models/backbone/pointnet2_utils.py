@@ -9,11 +9,12 @@
 @License :   MIT LISCENSE; Copyright (c) 2019 benny
 @Desc    :   code borrorwed from https://github.com/yanx27/Pointnet_Pointnet2_pytorch
 """
+from time import time
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from time import time
-import numpy as np
 
 
 def timeit(tag, t):

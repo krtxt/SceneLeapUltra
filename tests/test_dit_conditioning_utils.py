@@ -1,6 +1,6 @@
-import torch
 import numpy as np
 import pytest
+import torch
 
 from models.decoder.dit import _convert_to_tensor, _normalize_object_mask
 from models.decoder.dit_validation import DiTConditioningError

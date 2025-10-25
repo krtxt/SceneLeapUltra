@@ -4,19 +4,21 @@ Flow Matching 功能测试脚本
 测试FM模型、路径、求解器和引导模块的基本功能
 """
 
-import torch
 import sys
+
+import torch
+
 sys.path.insert(0, '/home/xiantuo/source/grasp/GithubClone/SceneLeapUltra')
 
 def test_imports():
     """测试所有FM模块是否能正确导入"""
     print("测试1: 模块导入")
     try:
-        from models.decoder.dit_fm import DiTFM, ContinuousTimeEmbedding
-        from models.fm_lightning import FlowMatchingLightning
-        from models.fm.paths import linear_ot_path, diffusion_path_vp
-        from models.fm.solvers import heun_solver, rk4_solver, integrate_ode
+        from models.decoder.dit_fm import ContinuousTimeEmbedding, DiTFM
         from models.fm.guidance import apply_cfg, apply_cfg_clipped
+        from models.fm.paths import diffusion_path_vp, linear_ot_path
+        from models.fm.solvers import heun_solver, integrate_ode, rk4_solver
+        from models.fm_lightning import FlowMatchingLightning
         print("✅ 所有模块导入成功")
         return True
     except Exception as e:
@@ -94,7 +96,7 @@ def test_rk4_solver():
     """测试RK4求解器"""
     print("\n测试4: RK4 Solver")
     try:
-        from models.fm.solvers import rk4_solver, ODESolverStats
+        from models.fm.solvers import ODESolverStats, rk4_solver
         
         B, num_grasps, D = 2, 4, 25
         
@@ -176,8 +178,9 @@ def test_dit_fm_forward():
     
     try:
         from omegaconf import OmegaConf
+
         from models.decoder.dit_fm import DiTFM
-        
+
         # 创建最小配置
         cfg = OmegaConf.create({
             'name': 'dit_fm',

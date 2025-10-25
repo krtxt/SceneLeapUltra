@@ -6,15 +6,17 @@ of cached data into the required output format for training and evaluation.
 Maintains exact compatibility with original formatting logic.
 """
 
-import torch
 import logging
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
+import torch
+
 from datasets.utils.hdf5_utils import get_default_error_values
-from .constants import (
-    STANDARD_CACHE_KEYS, FORMATCH_VAL_CACHE_KEYS, FORMATCH_TEST_CACHE_KEYS,
-    DEFAULT_ERROR_PROMPT, DEFAULT_EMPTY_PROMPT, get_cache_keys_for_mode,
-    get_default_error_values as get_constants_error_values
-)
+
+from .constants import (DEFAULT_EMPTY_PROMPT, DEFAULT_ERROR_PROMPT,
+                        FORMATCH_TEST_CACHE_KEYS, FORMATCH_VAL_CACHE_KEYS,
+                        STANDARD_CACHE_KEYS, get_cache_keys_for_mode)
+from .constants import get_default_error_values as get_constants_error_values
 
 
 class DataFormatter:
@@ -26,8 +28,9 @@ class DataFormatter:
     """
 
     @staticmethod
-    def format_normal_data(cached_data: Dict[str, Any],
-                          num_neg_prompts: int) -> Dict[str, Any]:
+    def format_normal_data(
+        cached_data: Dict[str, Any], num_neg_prompts: int
+    ) -> Dict[str, Any]:
         """
         Format normal cached data - must preserve exact output.
 
@@ -45,16 +48,23 @@ class DataFormatter:
         """
         default_values = get_default_error_values(num_neg_prompts)
         return {
-            'scene_pc': cached_data.get('scene_pc', default_values['scene_pc']),
-            'hand_model_pose': cached_data.get('hand_model_pose', default_values['hand_model_pose']),
-            'se3': cached_data.get('se3', default_values['se3']),
-            'positive_prompt': cached_data.get('positive_prompt', default_values['positive_prompt']),
-            'negative_prompts': cached_data.get('negative_prompts', default_values['negative_prompts']),
+            "scene_pc": cached_data.get("scene_pc", default_values["scene_pc"]),
+            "hand_model_pose": cached_data.get(
+                "hand_model_pose", default_values["hand_model_pose"]
+            ),
+            "se3": cached_data.get("se3", default_values["se3"]),
+            "positive_prompt": cached_data.get(
+                "positive_prompt", default_values["positive_prompt"]
+            ),
+            "negative_prompts": cached_data.get(
+                "negative_prompts", default_values["negative_prompts"]
+            ),
         }
 
     @staticmethod
-    def format_error_data(cached_data: Dict[str, Any],
-                         num_neg_prompts: int) -> Dict[str, Any]:
+    def format_error_data(
+        cached_data: Dict[str, Any], num_neg_prompts: int
+    ) -> Dict[str, Any]:
         """
         Format error data - must preserve exact output.
 
@@ -67,12 +77,18 @@ class DataFormatter:
         """
         default_values = get_default_error_values(num_neg_prompts)
         return {
-            'scene_pc': cached_data.get('scene_pc', default_values['scene_pc']),
-            'hand_model_pose': cached_data.get('hand_model_pose', default_values['hand_model_pose']),
-            'se3': cached_data.get('se3', default_values['se3']),
-            'positive_prompt': cached_data.get('positive_prompt', default_values['positive_prompt']),
-            'negative_prompts': cached_data.get('negative_prompts', default_values['negative_prompts']),
-            'error': cached_data['error']
+            "scene_pc": cached_data.get("scene_pc", default_values["scene_pc"]),
+            "hand_model_pose": cached_data.get(
+                "hand_model_pose", default_values["hand_model_pose"]
+            ),
+            "se3": cached_data.get("se3", default_values["se3"]),
+            "positive_prompt": cached_data.get(
+                "positive_prompt", default_values["positive_prompt"]
+            ),
+            "negative_prompts": cached_data.get(
+                "negative_prompts", default_values["negative_prompts"]
+            ),
+            "error": cached_data["error"],
         }
 
 
@@ -85,7 +101,9 @@ class ForMatchDataFormatter(DataFormatter):
     """
 
     @staticmethod
-    def get_formatch_default_error_values(num_neg_prompts: int, cache_mode: str = "val") -> Dict[str, Any]:
+    def get_formatch_default_error_values(
+        num_neg_prompts: int, cache_mode: str = "val"
+    ) -> Dict[str, Any]:
         """
         Get default values for error cases in ForMatch dataset.
 
@@ -101,19 +119,21 @@ class ForMatchDataFormatter(DataFormatter):
 
         # Additional fields for test mode
         if cache_mode == "test":
-            base_values.update({
-                'obj_code': 'unknown',
-                'scene_id': 'unknown',
-                'category_id_from_object_index': -1,
-                'depth_view_index': -1,
-            })
+            base_values.update(
+                {
+                    "obj_code": "unknown",
+                    "scene_id": "unknown",
+                    "category_id_from_object_index": -1,
+                    "depth_view_index": -1,
+                }
+            )
 
         return base_values
 
     @staticmethod
-    def format_formatch_normal_data(cached_data: Dict[str, Any],
-                                   num_neg_prompts: int,
-                                   cache_mode: str = "val") -> Dict[str, Any]:
+    def format_formatch_normal_data(
+        cached_data: Dict[str, Any], num_neg_prompts: int, cache_mode: str = "val"
+    ) -> Dict[str, Any]:
         """
         Format normal cached data for ForMatch dataset.
 
@@ -125,33 +145,48 @@ class ForMatchDataFormatter(DataFormatter):
         Returns:
             dict: Formatted data with all required ForMatch fields
         """
-        default_values = ForMatchDataFormatter.get_formatch_default_error_values(num_neg_prompts, cache_mode)
+        default_values = ForMatchDataFormatter.get_formatch_default_error_values(
+            num_neg_prompts, cache_mode
+        )
 
         result = {
-            'scene_pc': cached_data.get('scene_pc', default_values['scene_pc']),
-            'hand_model_pose': cached_data.get('hand_model_pose', default_values['hand_model_pose']),
-            'se3': cached_data.get('se3', default_values['se3']),
-            'positive_prompt': cached_data.get('positive_prompt', default_values['positive_prompt']),
-            'negative_prompts': cached_data.get('negative_prompts', default_values['negative_prompts']),
-            'obj_verts': cached_data.get('obj_verts', default_values['obj_verts']),
-            'obj_faces': cached_data.get('obj_faces', default_values['obj_faces']),
+            "scene_pc": cached_data.get("scene_pc", default_values["scene_pc"]),
+            "hand_model_pose": cached_data.get(
+                "hand_model_pose", default_values["hand_model_pose"]
+            ),
+            "se3": cached_data.get("se3", default_values["se3"]),
+            "positive_prompt": cached_data.get(
+                "positive_prompt", default_values["positive_prompt"]
+            ),
+            "negative_prompts": cached_data.get(
+                "negative_prompts", default_values["negative_prompts"]
+            ),
+            "obj_verts": cached_data.get("obj_verts", default_values["obj_verts"]),
+            "obj_faces": cached_data.get("obj_faces", default_values["obj_faces"]),
         }
 
         # Add test-specific fields if in test mode
         if cache_mode == "test":
-            result.update({
-                'obj_code': cached_data.get('obj_code', default_values['obj_code']),
-                'scene_id': cached_data.get('scene_id', default_values['scene_id']),
-                'category_id_from_object_index': cached_data.get('category_id_from_object_index', default_values['category_id_from_object_index']),
-                'depth_view_index': cached_data.get('depth_view_index', default_values['depth_view_index']),
-            })
+            result.update(
+                {
+                    "obj_code": cached_data.get("obj_code", default_values["obj_code"]),
+                    "scene_id": cached_data.get("scene_id", default_values["scene_id"]),
+                    "category_id_from_object_index": cached_data.get(
+                        "category_id_from_object_index",
+                        default_values["category_id_from_object_index"],
+                    ),
+                    "depth_view_index": cached_data.get(
+                        "depth_view_index", default_values["depth_view_index"]
+                    ),
+                }
+            )
 
         return result
 
     @staticmethod
-    def format_formatch_error_data(cached_data: Dict[str, Any],
-                                  num_neg_prompts: int,
-                                  cache_mode: str = "val") -> Dict[str, Any]:
+    def format_formatch_error_data(
+        cached_data: Dict[str, Any], num_neg_prompts: int, cache_mode: str = "val"
+    ) -> Dict[str, Any]:
         """
         Format error data for ForMatch dataset.
 
@@ -163,27 +198,42 @@ class ForMatchDataFormatter(DataFormatter):
         Returns:
             dict: Formatted error data with fallback values and error field
         """
-        default_values = ForMatchDataFormatter.get_formatch_default_error_values(num_neg_prompts, cache_mode)
+        default_values = ForMatchDataFormatter.get_formatch_default_error_values(
+            num_neg_prompts, cache_mode
+        )
 
         result = {
-            'scene_pc': cached_data.get('scene_pc', default_values['scene_pc']),
-            'hand_model_pose': cached_data.get('hand_model_pose', default_values['hand_model_pose']),
-            'se3': cached_data.get('se3', default_values['se3']),
-            'positive_prompt': cached_data.get('positive_prompt', default_values['positive_prompt']),
-            'negative_prompts': cached_data.get('negative_prompts', default_values['negative_prompts']),
-            'obj_verts': cached_data.get('obj_verts', default_values['obj_verts']),
-            'obj_faces': cached_data.get('obj_faces', default_values['obj_faces']),
-            'error': cached_data['error']
+            "scene_pc": cached_data.get("scene_pc", default_values["scene_pc"]),
+            "hand_model_pose": cached_data.get(
+                "hand_model_pose", default_values["hand_model_pose"]
+            ),
+            "se3": cached_data.get("se3", default_values["se3"]),
+            "positive_prompt": cached_data.get(
+                "positive_prompt", default_values["positive_prompt"]
+            ),
+            "negative_prompts": cached_data.get(
+                "negative_prompts", default_values["negative_prompts"]
+            ),
+            "obj_verts": cached_data.get("obj_verts", default_values["obj_verts"]),
+            "obj_faces": cached_data.get("obj_faces", default_values["obj_faces"]),
+            "error": cached_data["error"],
         }
 
         # Add test-specific fields if in test mode
         if cache_mode == "test":
-            result.update({
-                'obj_code': cached_data.get('obj_code', default_values['obj_code']),
-                'scene_id': cached_data.get('scene_id', default_values['scene_id']),
-                'category_id_from_object_index': cached_data.get('category_id_from_object_index', default_values['category_id_from_object_index']),
-                'depth_view_index': cached_data.get('depth_view_index', default_values['depth_view_index']),
-            })
+            result.update(
+                {
+                    "obj_code": cached_data.get("obj_code", default_values["obj_code"]),
+                    "scene_id": cached_data.get("scene_id", default_values["scene_id"]),
+                    "category_id_from_object_index": cached_data.get(
+                        "category_id_from_object_index",
+                        default_values["category_id_from_object_index"],
+                    ),
+                    "depth_view_index": cached_data.get(
+                        "depth_view_index", default_values["depth_view_index"]
+                    ),
+                }
+            )
 
         return result
 

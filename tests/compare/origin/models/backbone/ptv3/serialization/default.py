@@ -1,9 +1,13 @@
 import torch
 
-from models.backbone.ptv3.serialization.hilbert import decode as hilbert_decode_
-from models.backbone.ptv3.serialization.hilbert import encode as hilbert_encode_
-from models.backbone.ptv3.serialization.z_order import key2xyz as z_order_decode_
-from models.backbone.ptv3.serialization.z_order import xyz2key as z_order_encode_
+from models.backbone.ptv3.serialization.hilbert import \
+    decode as hilbert_decode_
+from models.backbone.ptv3.serialization.hilbert import \
+    encode as hilbert_encode_
+from models.backbone.ptv3.serialization.z_order import \
+    key2xyz as z_order_decode_
+from models.backbone.ptv3.serialization.z_order import \
+    xyz2key as z_order_encode_
 
 
 @torch.inference_mode()

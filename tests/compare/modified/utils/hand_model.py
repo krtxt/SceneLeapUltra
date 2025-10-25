@@ -4,14 +4,14 @@ import os
 import pathlib
 from collections import defaultdict
 from enum import Enum, auto
-from typing import Optional, Union, Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import plotly.graph_objects as go
 import pytorch_kinematics as pk
 import torch
 import trimesh as tm
-from torchsdf import index_vertices_by_faces, compute_sdf
+from torchsdf import compute_sdf, index_vertices_by_faces
 
 # Define slice constants for pose components
 TRANSLATION_SLICE = slice(0, 3)
@@ -21,36 +21,32 @@ ROTATION_SLICE = slice(19, None)
 # Attempt to import PyTorch3D for specific functionalities
 try:
     from pytorch3d.ops import knn_points
+    from pytorch3d.ops import \
+        sample_farthest_points as pytorch3d_sample_farthest_points
+    from pytorch3d.ops import \
+        sample_points_from_meshes as pytorch3d_sample_points_from_meshes
     from pytorch3d.structures import Meshes as PyTorch3DMeshes
-    from pytorch3d.ops import sample_points_from_meshes as pytorch3d_sample_points_from_meshes
-    from pytorch3d.ops import sample_farthest_points as pytorch3d_sample_farthest_points
     _PYTORCH3D_AVAILABLE = True
 except ImportError:
     _PYTORCH3D_AVAILABLE = False
     # Define dummy functions or raise errors if PyTorch3D is critical for some operations
     # For now, methods requiring these will check _PYTORCH3D_AVAILABLE
 
-from utils.leap_hand_info import (
-    LEAP_HAND_CONTACT_POINTS_PATH,
-    LEAP_HAND_DEFAULT_JOINT_ANGLES,
-    LEAP_HAND_DEFAULT_ORIENTATION,
-    LEAP_HAND_FINGERTIP_KEYWORDS,
-    LEAP_HAND_FINGERTIP_NAMES,
-    LEAP_HAND_JOINT_NAMES,
-    LEAP_HAND_NUM_FINGERS,
-    LEAP_HAND_NUM_JOINTS,
-    LEAP_HAND_PENETRATION_POINTS_PATH,
-    LEAP_HAND_URDF_PATH,
-)
-from utils.rot6d import (
-    robust_compute_rotation_matrix_from_ortho6d,
-)
-from utils.point_utils import transform_points
 from utils.hand_loader import HandLoader
 from utils.hand_physics import HandPhysics
-from utils.hand_visualizer import HandVisualizer
 from utils.hand_types import HandModelType
-
+from utils.hand_visualizer import HandVisualizer
+from utils.leap_hand_info import (LEAP_HAND_CONTACT_POINTS_PATH,
+                                  LEAP_HAND_DEFAULT_JOINT_ANGLES,
+                                  LEAP_HAND_DEFAULT_ORIENTATION,
+                                  LEAP_HAND_FINGERTIP_KEYWORDS,
+                                  LEAP_HAND_FINGERTIP_NAMES,
+                                  LEAP_HAND_JOINT_NAMES, LEAP_HAND_NUM_FINGERS,
+                                  LEAP_HAND_NUM_JOINTS,
+                                  LEAP_HAND_PENETRATION_POINTS_PATH,
+                                  LEAP_HAND_URDF_PATH)
+from utils.point_utils import transform_points
+from utils.rot6d import robust_compute_rotation_matrix_from_ortho6d
 
 SELF_PENETRATION_POINT_RADIUS = 0.01
 
@@ -453,6 +449,7 @@ class HandModel:
             global_rotation_flat = axis_angle_to_matrix(rotation_params)
         elif self.rot_type == 'euler':
             from pytorch3d.transforms import euler_angles_to_matrix
+
             # Assuming "XYZ" convention for Euler angles
             global_rotation_flat = euler_angles_to_matrix(rotation_params, convention="XYZ")
 

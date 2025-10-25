@@ -5,8 +5,10 @@ This module provides reusable functions for tensor padding, batch collation,
 and device/dtype inference to eliminate code duplication in dataset collate_fn methods.
 """
 
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import torch
+
 from .dataset_config import CONFIG
 
 

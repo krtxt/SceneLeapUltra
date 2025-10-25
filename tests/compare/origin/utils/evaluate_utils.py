@@ -1,15 +1,17 @@
+from typing import Dict, Tuple, Union
+
 import numpy as np
-import torch
-import scipy.spatial
 import pytorch3d.ops
 import pytorch3d.structures
-from typing import Dict, Tuple, Union
+import scipy.spatial
+import torch
 from torch import Tensor
 # try:
 #     from csdf import compute_sdf, index_vertices_by_faces
 # except ImportError:
 #     from torchsdf import index_vertices_by_faces, compute_sdf
-from torchsdf import index_vertices_by_faces, compute_sdf
+from torchsdf import compute_sdf, index_vertices_by_faces
+
 
 def cal_distance_to_mesh(
     query_points: Tensor,

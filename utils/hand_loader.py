@@ -12,14 +12,18 @@ from urdf_parser_py.urdf import Box, Mesh, Robot, Sphere
 
 try:
     from pytorch3d.ops import knn_points
-    from pytorch3d.structures import Meshes as PyTorch3DMeshes
-    from pytorch3d.ops import sample_points_from_meshes as pytorch3d_sample_points_from_meshes
     from pytorch3d.ops import sample_farthest_points as pytorch3d_sample_farthest_points
+    from pytorch3d.ops import (
+        sample_points_from_meshes as pytorch3d_sample_points_from_meshes,
+    )
+    from pytorch3d.structures import Meshes as PyTorch3DMeshes
+
     _PYTORCH3D_AVAILABLE = True
 except ImportError:
     _PYTORCH3D_AVAILABLE = False
 
 from torchsdf import index_vertices_by_faces
+
 from utils.path_utils import get_assets_folder
 
 
@@ -56,7 +60,9 @@ class HandLoader:
             os.path.dirname(os.path.dirname(urdf_path)), mesh_filename
         )
         if not os.path.exists(file_path1) and not os.path.exists(file_path2):
-            raise FileNotFoundError(f"Could not find file: {file_path1} or {file_path2}")
+            raise FileNotFoundError(
+                f"Could not find file: {file_path1} or {file_path2}"
+            )
 
         if os.path.exists(file_path1) and os.path.exists(file_path2):
             raise AssertionError(
@@ -125,7 +131,8 @@ class HandLoader:
                 # )
                 link_mesh = tm.load_mesh(
                     self.get_mesh_file_path(
-                        urdf_path=self.urdf_path, mesh_filename=collision.geometry.filename
+                        urdf_path=self.urdf_path,
+                        mesh_filename=collision.geometry.filename,
                     ),
                     process=False,
                 )
@@ -289,7 +296,9 @@ class HandLoader:
             "joints_upper": joints_upper,
         }
 
-    def _sample_surface_points(self, n_surface_points: int, mesh_dict: Dict, areas: Dict) -> None:
+    def _sample_surface_points(
+        self, n_surface_points: int, mesh_dict: Dict, areas: Dict
+    ) -> None:
         device = self.device
 
         if n_surface_points == 0:
@@ -300,7 +309,9 @@ class HandLoader:
             return
 
         if not _PYTORCH3D_AVAILABLE:
-            print("WARNING: PyTorch3D is not available. Skipping surface point sampling.")
+            print(
+                "WARNING: PyTorch3D is not available. Skipping surface point sampling."
+            )
             for link_name in mesh_dict:
                 mesh_dict[link_name]["surface_points"] = torch.tensor(
                     [], dtype=torch.float, device=device
@@ -335,4 +346,4 @@ class HandLoader:
                 dense_point_cloud, K=num_samples[link_name]
             )[0][0]
             surface_points = surface_points.to(dtype=torch.float, device=device)
-            mesh_dict[link_name]["surface_points"] = surface_points 
+            mesh_dict[link_name]["surface_points"] = surface_points

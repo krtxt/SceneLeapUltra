@@ -1,18 +1,25 @@
+import logging
+from statistics import mean
+from typing import Any, Dict, List, Optional, Tuple
+
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple, Any, List
+
 from models.decoder import build_decoder
 from models.loss import GraspLossPose
 from models.utils.diffusion_utils import make_schedule_ddpm
-from utils.hand_helper import process_hand_pose, process_hand_pose_test, denorm_hand_pose_robust
-from statistics import mean
-import logging
-from .utils.log_colors import HEADER, BLUE, GREEN, YELLOW, RED, ENDC, BOLD, UNDERLINE
+from utils.hand_helper import (denorm_hand_pose_robust, process_hand_pose,
+                               process_hand_pose_test)
+
 from .utils.diffusion_core import DiffusionCoreMixin
+from .utils.log_colors import (BLUE, BOLD, ENDC, GREEN, HEADER, RED, UNDERLINE,
+                               YELLOW)
+from .utils.logging_helpers import (convert_number_to_emoji,
+                                    log_validation_summary)
 from .utils.prediction import build_pred_dict_adaptive
-from .utils.logging_helpers import log_validation_summary, convert_number_to_emoji
+
 
 class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
     def __init__(self, cfg):

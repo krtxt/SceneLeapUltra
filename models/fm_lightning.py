@@ -6,29 +6,32 @@ using PyTorch Lightning, following the paradigm from "Flow Matching for
 Generative Modeling" (Lipman et al., 2023).
 """
 
+import logging
+import math
+from statistics import mean, stdev
+from typing import Any, Dict, List, Optional, Tuple
+
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple, Any, List
-import logging
-import math
-from statistics import mean, stdev
 
 # Import model building
 from models.decoder import build_decoder
-
-# Import loss and utilities
-from models.loss import GraspLossPose
-from utils.hand_helper import process_hand_pose, process_hand_pose_test, denorm_hand_pose_robust
-from models.utils.prediction import build_pred_dict_adaptive
-from models.utils.logging_helpers import log_validation_summary
-from models.utils.log_colors import HEADER, BLUE, GREEN, YELLOW, RED, ENDC, BOLD
-
+from models.fm.guidance import apply_cfg as fm_apply_cfg
+from models.fm.guidance import \
+    predictor_corrector_step as fm_predictor_corrector_step
+from models.fm.paths import add_stochasticity, get_path_fn
 # Flow Matching components
 from models.fm.solvers import integrate_ode as fm_integrate_ode
-from models.fm.paths import get_path_fn, add_stochasticity
-from models.fm.guidance import apply_cfg as fm_apply_cfg, predictor_corrector_step as fm_predictor_corrector_step
+# Import loss and utilities
+from models.loss import GraspLossPose
+from models.utils.log_colors import (BLUE, BOLD, ENDC, GREEN, HEADER, RED,
+                                     YELLOW)
+from models.utils.logging_helpers import log_validation_summary
+from models.utils.prediction import build_pred_dict_adaptive
+from utils.hand_helper import (denorm_hand_pose_robust, process_hand_pose,
+                               process_hand_pose_test)
 
 
 class FlowMatchingLightning(pl.LightningModule):

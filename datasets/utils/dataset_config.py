@@ -5,27 +5,22 @@ This module contains configuration classes for SceneLeapPro dataset implementati
 Constants and default values are now centralized in constants.py.
 """
 
-from typing import Dict, Any, Optional, List
-import torch
-import os
 import hashlib
+import os
 from dataclasses import dataclass, field
-from .constants import (
-    # Dimensions
-    POSE_DIM, POSITION_DIM, QUATERNION_DIM, JOINTS_DIM, SE3_SHAPE,
-    PC_XYZ_DIM, PC_RGB_DIM, PC_XYZRGB_DIM,
-    # Default values
-    DEFAULT_MODE, DEFAULT_MAX_GRASPS_PER_OBJECT, DEFAULT_MESH_SCALE,
-    DEFAULT_NUM_NEG_PROMPTS, DEFAULT_ENABLE_CROPPING, DEFAULT_MAX_POINTS,
-    DEFAULT_CACHE_VERSION, DEFAULT_CACHE_MODE,
-    # Data types
-    DEFAULT_DTYPE, DEFAULT_DEVICE, DEFAULT_LONG_DTYPE, DEFAULT_BOOL_DTYPE,
-    # Validation
-    VALID_COORDINATE_MODES, VALID_CACHE_MODES,
-    # Error handling
-    PADDING_VALUE, IDENTITY_QUATERNION, QUATERNION_NORM_THRESHOLD,
-    ALL_CACHE_KEYS, MIN_POSE_SHAPE, BATCH_POSE_SHAPE_SUFFIX, SE3_MATRIX_SHAPE
-)
+from typing import Any, Dict, List, Optional
+
+import torch
+
+from .constants import (  # Dimensions; Default values; Data types; Validation; Error handling
+    ALL_CACHE_KEYS, BATCH_POSE_SHAPE_SUFFIX, DEFAULT_BOOL_DTYPE,
+    DEFAULT_CACHE_MODE, DEFAULT_CACHE_VERSION, DEFAULT_DEVICE, DEFAULT_DTYPE,
+    DEFAULT_ENABLE_CROPPING, DEFAULT_LONG_DTYPE, DEFAULT_MAX_GRASPS_PER_OBJECT,
+    DEFAULT_MAX_POINTS, DEFAULT_MESH_SCALE, DEFAULT_MODE,
+    DEFAULT_NUM_NEG_PROMPTS, IDENTITY_QUATERNION, JOINTS_DIM, MIN_POSE_SHAPE,
+    PADDING_VALUE, PC_RGB_DIM, PC_XYZ_DIM, PC_XYZRGB_DIM, POSE_DIM,
+    POSITION_DIM, QUATERNION_DIM, QUATERNION_NORM_THRESHOLD, SE3_MATRIX_SHAPE,
+    SE3_SHAPE, VALID_CACHE_MODES, VALID_COORDINATE_MODES)
 
 
 @dataclass
@@ -63,7 +58,9 @@ class DatasetConfig:
     DEFAULT_BOOL_DTYPE: torch.dtype = DEFAULT_BOOL_DTYPE
 
     # Coordinate transformation modes
-    VALID_MODES: List[str] = field(default_factory=lambda: VALID_COORDINATE_MODES.copy())
+    VALID_MODES: List[str] = field(
+        default_factory=lambda: VALID_COORDINATE_MODES.copy()
+    )
 
     # Tensor shape validation
     MIN_POSE_SHAPE: tuple = MIN_POSE_SHAPE
@@ -72,30 +69,40 @@ class DatasetConfig:
 
     # Padding and fill values
     PADDING_VALUE: float = PADDING_VALUE
-    IDENTITY_QUATERNION: List[float] = field(default_factory=lambda: IDENTITY_QUATERNION.copy())
+    IDENTITY_QUATERNION: List[float] = field(
+        default_factory=lambda: IDENTITY_QUATERNION.copy()
+    )
     QUATERNION_NORM_THRESHOLD: float = QUATERNION_NORM_THRESHOLD
 
     # Error handling
     ERROR_RETURN_KEYS: List[str] = field(default_factory=lambda: ALL_CACHE_KEYS.copy())
 
     # Collation configuration
-    COLLATE_SPECIAL_KEYS: List[str] = field(default_factory=lambda: ['hand_model_pose', 'se3'])
-    COLLATE_LIST_KEYS: List[str] = field(default_factory=lambda: [
-        'object_mask', 'obj_verts', 'obj_faces',
-        'positive_prompt', 'negative_prompts', 'error'
-    ])
-    
+    COLLATE_SPECIAL_KEYS: List[str] = field(
+        default_factory=lambda: ["hand_model_pose", "se3"]
+    )
+    COLLATE_LIST_KEYS: List[str] = field(
+        default_factory=lambda: [
+            "object_mask",
+            "obj_verts",
+            "obj_faces",
+            "positive_prompt",
+            "negative_prompts",
+            "error",
+        ]
+    )
+
     def __post_init__(self):
         """Validate configuration after initialization."""
         self.validate()
-    
+
     def validate(self) -> bool:
         """
         Validate the configuration settings.
-        
+
         Returns:
             bool: True if configuration is valid
-            
+
         Raises:
             ValueError: If configuration is invalid
         """
@@ -106,77 +113,95 @@ class DatasetConfig:
                 f"POSITION_DIM + QUATERNION_DIM + JOINTS_DIM "
                 f"({self.POSITION_DIM + self.QUATERNION_DIM + self.JOINTS_DIM})"
             )
-        
+
         if self.PC_XYZRGB_DIM != self.PC_XYZ_DIM + self.PC_RGB_DIM:
             raise ValueError(
                 f"PC_XYZRGB_DIM ({self.PC_XYZRGB_DIM}) must equal "
                 f"PC_XYZ_DIM + PC_RGB_DIM ({self.PC_XYZ_DIM + self.PC_RGB_DIM})"
             )
-        
+
         # Validate mode
         if self.DEFAULT_MODE not in self.VALID_MODES:
-            raise ValueError(f"DEFAULT_MODE '{self.DEFAULT_MODE}' not in VALID_MODES {self.VALID_MODES}")
-        
+            raise ValueError(
+                f"DEFAULT_MODE '{self.DEFAULT_MODE}' not in VALID_MODES {self.VALID_MODES}"
+            )
+
         # Validate positive values
         if self.DEFAULT_MAX_POINTS <= 0:
-            raise ValueError(f"DEFAULT_MAX_POINTS must be positive, got {self.DEFAULT_MAX_POINTS}")
-        
+            raise ValueError(
+                f"DEFAULT_MAX_POINTS must be positive, got {self.DEFAULT_MAX_POINTS}"
+            )
+
         if self.DEFAULT_NUM_NEG_PROMPTS < 0:
-            raise ValueError(f"DEFAULT_NUM_NEG_PROMPTS must be non-negative, got {self.DEFAULT_NUM_NEG_PROMPTS}")
-        
+            raise ValueError(
+                f"DEFAULT_NUM_NEG_PROMPTS must be non-negative, got {self.DEFAULT_NUM_NEG_PROMPTS}"
+            )
+
         if self.DEFAULT_MESH_SCALE <= 0:
-            raise ValueError(f"DEFAULT_MESH_SCALE must be positive, got {self.DEFAULT_MESH_SCALE}")
-        
+            raise ValueError(
+                f"DEFAULT_MESH_SCALE must be positive, got {self.DEFAULT_MESH_SCALE}"
+            )
+
         # Validate quaternion
         if len(self.IDENTITY_QUATERNION) != self.QUATERNION_DIM:
             raise ValueError(
                 f"IDENTITY_QUATERNION length ({len(self.IDENTITY_QUATERNION)}) "
                 f"must equal QUATERNION_DIM ({self.QUATERNION_DIM})"
             )
-        
+
         return True
-    
-    def get_error_return_template(self, obj_code: str = 'unknown', scene_id: str = 'unknown',
-                                category_id: int = -1, depth_view_index: int = -1,
-                                error_msg: str = 'Unknown error') -> Dict[str, Any]:
+
+    def get_error_return_template(
+        self,
+        obj_code: str = "unknown",
+        scene_id: str = "unknown",
+        category_id: int = -1,
+        depth_view_index: int = -1,
+        error_msg: str = "Unknown error",
+    ) -> Dict[str, Any]:
         """
         Get a template dictionary for error returns.
-        
+
         Args:
             obj_code: Object code
             scene_id: Scene identifier
             category_id: Category ID
             depth_view_index: Depth view index
             error_msg: Error message
-            
+
         Returns:
             Dict[str, Any]: Error return template
         """
         return {
-            'obj_code': obj_code,
-            'scene_pc': torch.zeros((0, self.PC_XYZRGB_DIM), dtype=self.DEFAULT_DTYPE),
-            'object_mask': torch.zeros((0,), dtype=self.DEFAULT_BOOL_DTYPE),
-            'hand_model_pose': torch.zeros((0, self.POSE_DIM), dtype=self.DEFAULT_DTYPE),
-            'se3': torch.zeros((0, *self.SE3_SHAPE), dtype=self.DEFAULT_DTYPE),
-            'scene_id': scene_id,
-            'category_id_from_object_index': category_id,
-            'depth_view_index': depth_view_index,
-            'obj_verts': torch.zeros((0, self.PC_XYZ_DIM), dtype=self.DEFAULT_DTYPE),
-            'obj_faces': torch.zeros((0, self.PC_XYZ_DIM), dtype=self.DEFAULT_LONG_DTYPE),
-            'positive_prompt': '',
-            'negative_prompts': [],
-            'error': error_msg
+            "obj_code": obj_code,
+            "scene_pc": torch.zeros((0, self.PC_XYZRGB_DIM), dtype=self.DEFAULT_DTYPE),
+            "object_mask": torch.zeros((0,), dtype=self.DEFAULT_BOOL_DTYPE),
+            "hand_model_pose": torch.zeros(
+                (0, self.POSE_DIM), dtype=self.DEFAULT_DTYPE
+            ),
+            "se3": torch.zeros((0, *self.SE3_SHAPE), dtype=self.DEFAULT_DTYPE),
+            "scene_id": scene_id,
+            "category_id_from_object_index": category_id,
+            "depth_view_index": depth_view_index,
+            "obj_verts": torch.zeros((0, self.PC_XYZ_DIM), dtype=self.DEFAULT_DTYPE),
+            "obj_faces": torch.zeros(
+                (0, self.PC_XYZ_DIM), dtype=self.DEFAULT_LONG_DTYPE
+            ),
+            "positive_prompt": "",
+            "negative_prompts": [],
+            "error": error_msg,
         }
-    
-    def get_identity_quaternion_tensor(self, device: Optional[torch.device] = None, 
-                                     dtype: Optional[torch.dtype] = None) -> torch.Tensor:
+
+    def get_identity_quaternion_tensor(
+        self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None
+    ) -> torch.Tensor:
         """
         Get identity quaternion as tensor.
-        
+
         Args:
             device: Target device
             dtype: Target dtype
-            
+
         Returns:
             torch.Tensor: Identity quaternion tensor
         """
@@ -184,7 +209,7 @@ class DatasetConfig:
             device = self.DEFAULT_DEVICE
         if dtype is None:
             dtype = self.DEFAULT_DTYPE
-            
+
         return torch.tensor(self.IDENTITY_QUATERNION, device=device, dtype=dtype)
 
 
@@ -192,8 +217,9 @@ class DatasetConfig:
 CONFIG = DatasetConfig()
 
 
-def validate_dataset_configuration(root_dir: str, succ_grasp_dir: str,
-                                 obj_root_dir: str, mode: str) -> bool:
+def validate_dataset_configuration(
+    root_dir: str, succ_grasp_dir: str, obj_root_dir: str, mode: str
+) -> bool:
     """
     Validate dataset configuration parameters.
 
@@ -231,6 +257,7 @@ class CachedDatasetConfig:
     This class manages all configuration parameters for cached SceneLeapPro datasets,
     including cache file naming, hash generation, and parameter validation.
     """
+
     root_dir: str
     succ_grasp_dir: str
     obj_root_dir: str
@@ -261,20 +288,28 @@ class CachedDatasetConfig:
         if not os.path.exists(self.root_dir):
             raise ValueError(f"Root directory does not exist: {self.root_dir}")
         if not os.path.exists(self.succ_grasp_dir):
-            raise ValueError(f"Success grasp directory does not exist: {self.succ_grasp_dir}")
+            raise ValueError(
+                f"Success grasp directory does not exist: {self.succ_grasp_dir}"
+            )
         if not os.path.exists(self.obj_root_dir):
-            raise ValueError(f"Object root directory does not exist: {self.obj_root_dir}")
+            raise ValueError(
+                f"Object root directory does not exist: {self.obj_root_dir}"
+            )
 
         # Validate mode
         if self.mode not in CONFIG.VALID_MODES:
-            raise ValueError(f"Invalid mode '{self.mode}'. Valid modes: {CONFIG.VALID_MODES}")
+            raise ValueError(
+                f"Invalid mode '{self.mode}'. Valid modes: {CONFIG.VALID_MODES}"
+            )
 
         # Validate positive values
         if self.max_points <= 0:
             raise ValueError(f"max_points must be positive, got {self.max_points}")
 
         if self.num_neg_prompts < 0:
-            raise ValueError(f"num_neg_prompts must be non-negative, got {self.num_neg_prompts}")
+            raise ValueError(
+                f"num_neg_prompts must be non-negative, got {self.num_neg_prompts}"
+            )
 
         if self.mesh_scale <= 0:
             raise ValueError(f"mesh_scale must be positive, got {self.mesh_scale}")
@@ -282,14 +317,19 @@ class CachedDatasetConfig:
         # Validate cache_mode
         valid_cache_modes = ["train", "val", "test"]
         if self.cache_mode not in valid_cache_modes:
-            raise ValueError(f"Invalid cache_mode '{self.cache_mode}'. Valid modes: {valid_cache_modes}")
+            raise ValueError(
+                f"Invalid cache_mode '{self.cache_mode}'. Valid modes: {valid_cache_modes}"
+            )
 
         return True
 
-    def generate_cache_hash(self, num_grasps: Optional[int] = None,
-                           grasp_sampling_strategy: Optional[str] = None,
-                           use_exhaustive_sampling: bool = False,
-                           exhaustive_sampling_strategy: Optional[str] = None) -> str:
+    def generate_cache_hash(
+        self,
+        num_grasps: Optional[int] = None,
+        grasp_sampling_strategy: Optional[str] = None,
+        use_exhaustive_sampling: bool = False,
+        exhaustive_sampling_strategy: Optional[str] = None,
+    ) -> str:
         """
         Generate MD5 hash for cache filename.
 
@@ -330,15 +370,20 @@ class CachedDatasetConfig:
         if use_exhaustive_sampling:
             params_string += f",use_exhaustive_sampling={use_exhaustive_sampling}"
         if exhaustive_sampling_strategy is not None:
-            params_string += f",exhaustive_sampling_strategy={exhaustive_sampling_strategy}"
+            params_string += (
+                f",exhaustive_sampling_strategy={exhaustive_sampling_strategy}"
+            )
 
-        return hashlib.md5(params_string.encode('utf-8')).hexdigest()
+        return hashlib.md5(params_string.encode("utf-8")).hexdigest()
 
-    def generate_cache_filename(self, dataset_type: str = "sceneleappro",
-                               num_grasps: Optional[int] = None,
-                               grasp_sampling_strategy: Optional[str] = None,
-                               use_exhaustive_sampling: bool = False,
-                               exhaustive_sampling_strategy: Optional[str] = None) -> str:
+    def generate_cache_filename(
+        self,
+        dataset_type: str = "sceneleappro",
+        num_grasps: Optional[int] = None,
+        grasp_sampling_strategy: Optional[str] = None,
+        use_exhaustive_sampling: bool = False,
+        exhaustive_sampling_strategy: Optional[str] = None,
+    ) -> str:
         """
         Generate cache filename maintaining existing conventions.
 
@@ -356,12 +401,14 @@ class CachedDatasetConfig:
             num_grasps=num_grasps,
             grasp_sampling_strategy=grasp_sampling_strategy,
             use_exhaustive_sampling=use_exhaustive_sampling,
-            exhaustive_sampling_strategy=exhaustive_sampling_strategy
+            exhaustive_sampling_strategy=exhaustive_sampling_strategy,
         )
 
         if self.cache_mode == "train":
             # Original SceneLeapProDatasetCached naming pattern
-            return f'sceneleappro_{cache_hash}_{self.mode}_{self.max_grasps_per_object}.h5'
+            return (
+                f"sceneleappro_{cache_hash}_{self.mode}_{self.max_grasps_per_object}.h5"
+            )
         else:
             # ForMatch naming pattern
-            return f'sceneleappro_{self.cache_mode}_{cache_hash}_{self.mode}_{self.max_grasps_per_object}.h5'
+            return f"sceneleappro_{self.cache_mode}_{cache_hash}_{self.mode}_{self.max_grasps_per_object}.h5"

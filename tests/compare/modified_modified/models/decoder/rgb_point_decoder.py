@@ -2,9 +2,9 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+from model.utils.helpers import (ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT,
+                                 GenericMLP, get_clones)
 from torch.functional import Tensor
-
-from model.utils.helpers import (ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT, GenericMLP, get_clones)
 
 
 class GraspTaskDecoder(nn.Module):

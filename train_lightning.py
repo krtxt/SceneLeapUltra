@@ -1,40 +1,36 @@
 import logging
 import os
 from pathlib import Path
+
 import hydra
 import pytorch_lightning as pl
 import torch
 import wandb
 from omegaconf import OmegaConf
-from pytorch_lightning.callbacks import (
-    ModelCheckpoint,
-    LearningRateMonitor,
-    DeviceStatsMonitor,
-    ModelSummary,
-    RichProgressBar
-)
-from pytorch_lightning.callbacks.progress.rich_progress import RichProgressBarTheme
+from pytorch_lightning.callbacks import (DeviceStatsMonitor,
+                                         LearningRateMonitor, ModelCheckpoint,
+                                         ModelSummary, RichProgressBar)
+from pytorch_lightning.callbacks.progress.rich_progress import \
+    RichProgressBarTheme
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.profilers import PyTorchProfiler
 
 from datasets.scenedex_datamodule import SceneLeapDataModule
-from utils.wandb_callbacks import WandbVisualizationCallback, WandbMetricsCallback
+from models.cvae import GraspCVAELightning
 # from models.diffuser_lightning_copy import DDPMLightning
 from models.diffuser_lightning import DDPMLightning
-from models.cvae import GraspCVAELightning
 from models.fm_lightning import FlowMatchingLightning
-from utils.logging_utils import setup_basic_logging, setup_file_logging
-from utils.git_utils import get_git_head_hash
 from utils.backup_utils import backup_code
-from utils.distributed_utils import (
-    setup_distributed_environment,
-    setup_environment_variables,
-    adjust_batch_size_for_distributed,
-    adjust_learning_rate_for_distributed,
-    get_trainer_kwargs,
-    log_distributed_info,
-    is_main_process
-)
+from utils.distributed_utils import (adjust_batch_size_for_distributed,
+                                     adjust_learning_rate_for_distributed,
+                                     get_trainer_kwargs, is_main_process,
+                                     log_distributed_info,
+                                     setup_distributed_environment,
+                                     setup_environment_variables)
+from utils.git_utils import get_git_head_hash
+from utils.logging_utils import setup_basic_logging, setup_file_logging
+from utils.wandb_callbacks import (WandbMetricsCallback,
+                                   WandbVisualizationCallback)
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
@@ -117,8 +113,8 @@ def main(cfg) -> None:
             logger.warning("Unable to get git commit hash")
 
         # Backup repository snapshot
-        logging.info("Backing up source tree...")
-        backup_code(save_dir)
+        # logging.info("Backing up source tree...")
+        # backup_code(save_dir)
 
         # Save active configuration
         config_dir = save_dir / "config"

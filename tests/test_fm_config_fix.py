@@ -6,8 +6,10 @@
 2. pred_mode → 预测模式 (velocity)
 """
 
-import torch
 import sys
+
+import torch
+
 sys.path.insert(0, '/home/xiantuo/source/grasp/GithubClone/SceneLeapUltra')
 
 def test_mode_separation():
@@ -18,6 +20,7 @@ def test_mode_separation():
     
     try:
         from omegaconf import OmegaConf
+
         from models.decoder.dit_fm import DiTFM
         
         print("\n创建测试配置...")

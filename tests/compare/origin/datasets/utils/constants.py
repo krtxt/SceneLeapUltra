@@ -6,7 +6,8 @@ used across SceneLeapPro dataset implementations to improve maintainability and
 make configuration easily modifiable.
 """
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 import torch
 
 # =============================================================================

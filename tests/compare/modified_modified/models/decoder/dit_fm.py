@@ -6,23 +6,23 @@ It reuses most components from dit.py while adding continuous time embedding
 and velocity prediction capabilities.
 """
 
+import logging
+import math
+from typing import Any, Dict, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import logging
-from typing import Dict, Optional, Any, Tuple
 from einops import rearrange
 
-# Reuse components from existing DiT
-from .dit import (
-    DiTBlock, GraspTokenizer, PositionalEmbedding, TimestepEmbedding,
-    AdaptiveLayerNorm, OutputProjection, DiTModel,
-    DiTValidationError, DiTInputError, DiTDimensionError,
-    DiTDeviceError, DiTConditioningError, DiTGracefulFallback
-)
 from models.backbone import build_backbone
-from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
+from models.utils.text_encoder import PosNegTextEncoder, TextConditionProcessor
+
+# Reuse components from existing DiT
+from .dit import (AdaptiveLayerNorm, DiTBlock, DiTConditioningError,
+                  DiTDeviceError, DiTDimensionError, DiTGracefulFallback,
+                  DiTInputError, DiTModel, DiTValidationError, GraspTokenizer,
+                  OutputProjection, PositionalEmbedding, TimestepEmbedding)
 
 
 class ContinuousTimeEmbedding(nn.Module):
@@ -384,6 +384,7 @@ class DiTFM(nn.Module):
         Supports PointNet2 and PTv3 backbones.
         """
         import copy
+
         from omegaconf import OmegaConf
         adjusted_cfg = copy.deepcopy(backbone_cfg)
         

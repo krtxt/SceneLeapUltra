@@ -168,12 +168,16 @@ def sample_grasps_from_available(
         elif strategy == "nearest_point":
             indices = nearest_point_sampling(available_grasps[:, :3], num_grasps)
         else:  # repeat / fallback
-            indices = torch.arange(num_grasps, device=available_grasps.device) % num_available
+            indices = (
+                torch.arange(num_grasps, device=available_grasps.device) % num_available
+            )
         return available_grasps.index_select(0, indices)
 
     # num_available < num_grasps
     if strategy == "repeat":
-        indices = torch.arange(num_grasps, device=available_grasps.device) % num_available
+        indices = (
+            torch.arange(num_grasps, device=available_grasps.device) % num_available
+        )
     elif strategy in {"farthest_point", "nearest_point"}:
         base_indices = torch.arange(num_available, device=available_grasps.device)
         remaining = num_grasps - num_available
@@ -213,8 +217,7 @@ def generate_exhaustive_chunks(
 
     if strategy == "sequential":
         return [
-            list(range(i * num_grasps, (i + 1) * num_grasps))
-            for i in range(num_chunks)
+            list(range(i * num_grasps, (i + 1) * num_grasps)) for i in range(num_chunks)
         ]
     if strategy == "random":
         all_indices = torch.randperm(total_grasps)
@@ -229,8 +232,12 @@ def generate_exhaustive_chunks(
             for start_offset in range(num_chunks)
         ]
     if strategy in {"chunk_farthest_point", "chunk_nearest_point"}:
-        spatial_strategy = "farthest_point" if "farthest" in strategy else "nearest_point"
-        return _generate_spatial_chunks(all_poses, num_chunks, num_grasps, spatial_strategy)
+        spatial_strategy = (
+            "farthest_point" if "farthest" in strategy else "nearest_point"
+        )
+        return _generate_spatial_chunks(
+            all_poses, num_chunks, num_grasps, spatial_strategy
+        )
 
     raise ValueError(f"Unknown exhaustive sampling strategy: {strategy}")
 

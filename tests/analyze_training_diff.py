@@ -4,10 +4,11 @@
 """
 
 import sys
-import torch
-import pytorch_lightning as pl
-import yaml
 from pathlib import Path
+
+import pytorch_lightning as pl
+import torch
+import yaml
 
 print("="*80)
 print("训练差异诊断报告")

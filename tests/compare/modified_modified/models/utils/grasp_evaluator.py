@@ -1,8 +1,10 @@
-import numpy as np
-import torch
 from statistics import mean
 
-from utils.evaluate_utils import cal_q1, cal_pen
+import numpy as np
+import torch
+
+from utils.evaluate_utils import cal_pen, cal_q1
+
 
 class GraspMetricCalculator:
     def __init__(self, q1_cfg, hand_model, scale=0.1):

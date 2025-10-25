@@ -139,6 +139,7 @@ def test_basic_instantiation():
             return True
         
         from omegaconf import OmegaConf
+
         from models.backbone.ptv3_backbone import PTV3Backbone
         
         cfg_path = os.path.join(repo_root, 'config/model/diffuser/decoder/backbone/ptv3_light.yaml')

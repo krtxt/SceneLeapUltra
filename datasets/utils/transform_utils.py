@@ -5,19 +5,16 @@ This module provides utility functions for coordinate transformations, including
 hand pose transformations, LEAP format conversions, and SE(3) matrix operations.
 """
 
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
-from typing import Tuple, Optional
-
-from pytorch3d.transforms import (
-    quaternion_to_matrix, matrix_to_quaternion,
-    quaternion_invert, quaternion_multiply
-)
+from pytorch3d.transforms import (matrix_to_quaternion, quaternion_invert,
+                                  quaternion_multiply, quaternion_to_matrix)
 
 
 def transform_hand_poses_to_object_centric_frame(
-    raw_hand_poses_gw: torch.Tensor,
-    object_pose_in_gw_7d: torch.Tensor
+    raw_hand_poses_gw: torch.Tensor, object_pose_in_gw_7d: torch.Tensor
 ) -> torch.Tensor:
     """
     Transform hand poses from grasp world to object-centric frame.
@@ -33,9 +30,9 @@ def transform_hand_poses_to_object_centric_frame(
     device = raw_hand_poses_gw.device
 
     # Extract components
-    P_h_gw = raw_hand_poses_gw[:, :3]       # (N, 3) - hand positions
-    Q_h_gw = raw_hand_poses_gw[:, 3:7]      # (N, 4) - hand orientations [w,x,y,z]
-    Joints = raw_hand_poses_gw[:, 7:]       # (N, 16) - joint angles
+    P_h_gw = raw_hand_poses_gw[:, :3]  # (N, 3) - hand positions
+    Q_h_gw = raw_hand_poses_gw[:, 3:7]  # (N, 4) - hand orientations [w,x,y,z]
+    Joints = raw_hand_poses_gw[:, 7:]  # (N, 16) - joint angles
 
     # Expand object pose for batch processing
     t_obj_gw = object_pose_in_gw_7d[:3].unsqueeze(0).expand(N, -1)  # (N, 3)
@@ -46,10 +43,9 @@ def transform_hand_poses_to_object_centric_frame(
     R_obj_gw_inv = quaternion_to_matrix(q_obj_gw_inv)  # (N, 3, 3)
 
     # Transform hand positions: P_h_model = R_obj_gw_inv @ (P_h_gw - t_obj_gw)
-    P_h_model = torch.bmm(
-        R_obj_gw_inv,
-        (P_h_gw - t_obj_gw).unsqueeze(-1)
-    ).squeeze(-1)  # (N, 3)
+    P_h_model = torch.bmm(R_obj_gw_inv, (P_h_gw - t_obj_gw).unsqueeze(-1)).squeeze(
+        -1
+    )  # (N, 3)
 
     # Transform hand orientations: Q_h_model = q_obj_gw_inv * Q_h_gw
     Q_h_model = quaternion_multiply(q_obj_gw_inv, Q_h_gw)  # (N, 4)
@@ -79,13 +75,15 @@ def revert_leap_qpos_static(qpos_decomposed: torch.Tensor) -> torch.Tensor:
     # Handle empty batch case
     if qpos_decomposed_tensor.shape[0] == 0:
         empty_shape = (0, 23) if is_batched else (23,)
-        return torch.zeros(empty_shape, dtype=torch.float32, device=qpos_decomposed_tensor.device)
+        return torch.zeros(
+            empty_shape, dtype=torch.float32, device=qpos_decomposed_tensor.device
+        )
 
     B = qpos_decomposed_tensor.shape[0]
     device = qpos_decomposed_tensor.device
 
     # Extract components
-    P_new = qpos_decomposed_tensor[..., :3]      # (B, 3) - positions
+    P_new = qpos_decomposed_tensor[..., :3]  # (B, 3) - positions
     quat_new = qpos_decomposed_tensor[..., 3:7]  # (B, 4) - quaternions [w,x,y,z]
     joint_angles = qpos_decomposed_tensor[..., 7:]  # (B, 16) - joint angles
 
@@ -93,12 +91,14 @@ def revert_leap_qpos_static(qpos_decomposed: torch.Tensor) -> torch.Tensor:
     R_new = quaternion_to_matrix(quat_new)  # (B, 3, 3)
 
     # Apply LEAP-specific transformations
-    delta_rot_quat = torch.tensor([0., 1., 0., 0.], device=device, dtype=torch.float32)
+    delta_rot_quat = torch.tensor(
+        [0.0, 1.0, 0.0, 0.0], device=device, dtype=torch.float32
+    )
     delta_rot_quat = delta_rot_quat.view(1, 4).expand(B, -1)
     DeltaR = quaternion_to_matrix(delta_rot_quat)  # (B, 3, 3)
 
     # Apply offset transformation
-    T_offset_local = torch.tensor([0., 0., 0.1], device=device, dtype=torch.float32)
+    T_offset_local = torch.tensor([0.0, 0.0, 0.1], device=device, dtype=torch.float32)
     T_offset_local = T_offset_local.view(1, 3, 1).expand(B, -1, -1)
 
     Offset_world = torch.matmul(R_new, T_offset_local).squeeze(-1)  # (B, 3)
@@ -119,9 +119,7 @@ def revert_leap_qpos_static(qpos_decomposed: torch.Tensor) -> torch.Tensor:
 
 
 def transform_hand_poses_omf_to_cf(
-    hand_poses_omf: torch.Tensor,
-    R_omf_to_cf_np: np.ndarray,
-    t_omf_to_cf_np: np.ndarray
+    hand_poses_omf: torch.Tensor, R_omf_to_cf_np: np.ndarray, t_omf_to_cf_np: np.ndarray
 ) -> torch.Tensor:
     """
     Transform hand poses from Object Model Frame (OMF) to Camera Frame (CF).
@@ -145,19 +143,25 @@ def transform_hand_poses_omf_to_cf(
     device = temp_hand_poses_omf.device
 
     # Extract components
-    P_omf = temp_hand_poses_omf[:, :3]        # (N, 3) - positions
+    P_omf = temp_hand_poses_omf[:, :3]  # (N, 3) - positions
     Q_omf_wxyz = temp_hand_poses_omf[:, 3:7]  # (N, 4) - quaternions [w,x,y,z]
-    Joints = temp_hand_poses_omf[:, 7:]       # (N, 16) - joint angles
+    Joints = temp_hand_poses_omf[:, 7:]  # (N, 16) - joint angles
 
     # Convert transformation to tensors
-    R_omf_to_cf = torch.from_numpy(R_omf_to_cf_np.astype(np.float32)).to(device)  # (3, 3)
-    t_omf_to_cf = torch.from_numpy(t_omf_to_cf_np.astype(np.float32)).to(device).unsqueeze(0)  # (1, 3)
+    R_omf_to_cf = torch.from_numpy(R_omf_to_cf_np.astype(np.float32)).to(
+        device
+    )  # (3, 3)
+    t_omf_to_cf = (
+        torch.from_numpy(t_omf_to_cf_np.astype(np.float32)).to(device).unsqueeze(0)
+    )  # (1, 3)
 
     # Transform positions: P_cf = P_omf @ R_omf_to_cf.T + t_omf_to_cf
     P_cf = torch.matmul(P_omf, R_omf_to_cf.T) + t_omf_to_cf  # (N, 3)
 
     # Transform orientations: Q_cf = Q_R_omf_to_cf * Q_omf_wxyz
-    Q_R_omf_to_cf = matrix_to_quaternion(R_omf_to_cf).unsqueeze(0).expand(N, -1)  # (N, 4)
+    Q_R_omf_to_cf = (
+        matrix_to_quaternion(R_omf_to_cf).unsqueeze(0).expand(N, -1)
+    )  # (N, 4)
     Q_cf_wxyz = quaternion_multiply(Q_R_omf_to_cf, Q_omf_wxyz)  # (N, 4)
 
     # Reconstruct hand poses
@@ -166,7 +170,9 @@ def transform_hand_poses_omf_to_cf(
     return hand_poses_cf if is_batched else hand_poses_cf.squeeze(0)
 
 
-def create_se3_matrix_from_pose(position: torch.Tensor, quaternion: torch.Tensor) -> torch.Tensor:
+def create_se3_matrix_from_pose(
+    position: torch.Tensor, quaternion: torch.Tensor
+) -> torch.Tensor:
     """
     Create SE(3) transformation matrix from position and quaternion.
 
@@ -178,16 +184,18 @@ def create_se3_matrix_from_pose(position: torch.Tensor, quaternion: torch.Tensor
         SE(3) transformation matrix (4, 4)
     """
     se3_matrix = torch.eye(4, device=position.device, dtype=position.dtype)
-    
+
     # Handle zero quaternion case
     current_Q_for_R = quaternion
     if torch.norm(quaternion) < 1e-6:
-        current_Q_for_R = torch.tensor([1.0, 0.0, 0.0, 0.0], device=position.device, dtype=position.dtype)
-    
+        current_Q_for_R = torch.tensor(
+            [1.0, 0.0, 0.0, 0.0], device=position.device, dtype=position.dtype
+        )
+
     R_matrix = quaternion_to_matrix(current_Q_for_R)
     se3_matrix[:3, :3] = R_matrix
     se3_matrix[:3, 3] = position
-    
+
     return se3_matrix
 
 
@@ -203,11 +211,11 @@ def reorder_hand_pose_components(hand_pose: torch.Tensor) -> torch.Tensor:
     """
     if hand_pose.shape[0] != 23:
         return torch.zeros(23, dtype=torch.float32)
-    
-    P = hand_pose[:3]           # Position (3,)
-    Q_wxyz = hand_pose[3:7]     # Quaternion (4,)
-    Joints = hand_pose[7:]      # Joint angles (16,)
-    
+
+    P = hand_pose[:3]  # Position (3,)
+    Q_wxyz = hand_pose[3:7]  # Quaternion (4,)
+    Joints = hand_pose[7:]  # Joint angles (16,)
+
     return torch.cat([P, Joints, Q_wxyz], dim=-1)
 
 
@@ -221,22 +229,21 @@ def extract_object_name_from_code(object_code: str) -> str:
     Returns:
         Extracted object name
     """
-    if '_' not in object_code:
+    if "_" not in object_code:
         return object_code
 
     # Split by underscore and remove the last part (UID)
-    parts = object_code.split('_')
+    parts = object_code.split("_")
     if len(parts) <= 1:
         return object_code
 
     # The UID is typically a long hex string, so we remove the last part
     # and rejoin the rest as the object name
-    return '_'.join(parts[:-1])
+    return "_".join(parts[:-1])
 
 
 def validate_hand_pose_data(
-    raw_qpos: Optional[np.ndarray],
-    obj_pose: Optional[np.ndarray]
+    raw_qpos: Optional[np.ndarray], obj_pose: Optional[np.ndarray]
 ) -> bool:
     """
     Validate hand pose data shapes and types.
@@ -249,11 +256,11 @@ def validate_hand_pose_data(
         True if data is valid, False otherwise
     """
     return (
-        raw_qpos is not None and
-        raw_qpos.ndim == 2 and
-        raw_qpos.shape[1] == 23 and
-        obj_pose is not None and
-        obj_pose.shape == (7,)
+        raw_qpos is not None
+        and raw_qpos.ndim == 2
+        and raw_qpos.shape[1] == 23
+        and obj_pose is not None
+        and obj_pose.shape == (7,)
     )
 
 
@@ -261,7 +268,7 @@ def transform_point_cloud_with_se3(
     points: np.ndarray,
     rotation_matrix: np.ndarray,
     translation_vector: np.ndarray,
-    inverse: bool = False
+    inverse: bool = False,
 ) -> np.ndarray:
     """
     Transform point cloud using SE(3) transformation.
@@ -280,18 +287,20 @@ def transform_point_cloud_with_se3(
 
     if inverse:
         # Apply inverse transformation: R^T @ (p - t)
-        transformed_points = np.dot(points - translation_vector.reshape(1, 3), rotation_matrix.T)
+        transformed_points = np.dot(
+            points - translation_vector.reshape(1, 3), rotation_matrix.T
+        )
     else:
         # Apply forward transformation: R @ p + t
-        transformed_points = np.dot(points, rotation_matrix.T) + translation_vector.reshape(1, 3)
+        transformed_points = np.dot(
+            points, rotation_matrix.T
+        ) + translation_vector.reshape(1, 3)
 
     return transformed_points
 
 
 def generate_negative_prompts(
-    scene_collision_info: list,
-    current_obj_name: str,
-    num_neg_prompts: int = 4
+    scene_collision_info: list, current_obj_name: str, num_neg_prompts: int = 4
 ) -> list:
     """
     Generate negative prompts from other objects in the scene.
@@ -308,7 +317,7 @@ def generate_negative_prompts(
     other_object_names = []
 
     for obj_info in scene_collision_info:
-        obj_name = obj_info.get('object_name')
+        obj_name = obj_info.get("object_name")
         if obj_name and obj_name != current_obj_name:
             other_object_names.append(obj_name)
 
@@ -326,7 +335,9 @@ def generate_negative_prompts(
         negative_prompts = [""] * num_neg_prompts
     elif len(unique_object_names) < num_neg_prompts:
         # Fewer objects than required - pad with last object name
-        negative_prompts = unique_object_names + [unique_object_names[-1]] * (num_neg_prompts - len(unique_object_names))
+        negative_prompts = unique_object_names + [unique_object_names[-1]] * (
+            num_neg_prompts - len(unique_object_names)
+        )
     else:
         # More objects than required - take first N objects
         negative_prompts = unique_object_names[:num_neg_prompts]
@@ -346,9 +357,9 @@ def get_camera_transform(scene_gt_for_view: list, target_obj_id: int) -> tuple:
         Tuple of (rotation_matrix, translation_vector) or (None, None) if not found
     """
     for obj_gt in scene_gt_for_view:
-        if obj_gt.get('obj_id') == target_obj_id:
-            cam_R_m2c_list = obj_gt.get('cam_R_m2c')
-            cam_t_m2c_list = obj_gt.get('cam_t_m2c')
+        if obj_gt.get("obj_id") == target_obj_id:
+            cam_R_m2c_list = obj_gt.get("cam_R_m2c")
+            cam_t_m2c_list = obj_gt.get("cam_t_m2c")
             if cam_R_m2c_list is None or cam_t_m2c_list is None:
                 return None, None
             try:
@@ -365,7 +376,7 @@ def get_specific_hand_pose(
     scene_id: str,
     object_code: str,
     grasp_npy_idx: int,
-    default_pose_dim: int = 23
+    default_pose_dim: int = 23,
 ) -> torch.Tensor:
     """
     Get specific hand pose from hand pose data.
@@ -388,7 +399,10 @@ def get_specific_hand_pose(
     if not isinstance(all_reverted_poses_tensor, torch.Tensor):
         return torch.zeros(default_pose_dim, dtype=torch.float32)
 
-    if all_reverted_poses_tensor.ndim != 2 or all_reverted_poses_tensor.shape[1] != default_pose_dim:
+    if (
+        all_reverted_poses_tensor.ndim != 2
+        or all_reverted_poses_tensor.shape[1] != default_pose_dim
+    ):
         return torch.zeros(default_pose_dim, dtype=torch.float32)
 
     num_available_poses = all_reverted_poses_tensor.shape[0]
@@ -399,8 +413,7 @@ def get_specific_hand_pose(
 
 
 def apply_object_pose_to_vertices(
-    vertices: torch.Tensor,
-    object_pose: torch.Tensor
+    vertices: torch.Tensor, object_pose: torch.Tensor
 ) -> torch.Tensor:
     """
     Transform vertices from object model frame to grasp/world frame.
@@ -440,7 +453,9 @@ def center_points_xy(points: torch.Tensor, center: torch.Tensor) -> torch.Tensor
     return points - offset.unsqueeze(0)
 
 
-def center_hand_poses_xy(hand_poses: torch.Tensor, center: torch.Tensor) -> torch.Tensor:
+def center_hand_poses_xy(
+    hand_poses: torch.Tensor, center: torch.Tensor
+) -> torch.Tensor:
     """
     Center hand poses on the XY plane.
 
@@ -471,10 +486,24 @@ def reorder_hand_pose_batch(hand_poses: torch.Tensor) -> torch.Tensor:
     Returns:
         Reordered hand pose tensor (N, 23) in [P, Joints, Q] format
     """
-    if not isinstance(hand_poses, torch.Tensor) or hand_poses.ndim != 2 or hand_poses.shape[1] != 23:
-        batch_dim = hand_poses.shape[0] if isinstance(hand_poses, torch.Tensor) and hand_poses.ndim > 0 else 0
-        dtype = hand_poses.dtype if isinstance(hand_poses, torch.Tensor) else torch.float32
-        device = hand_poses.device if isinstance(hand_poses, torch.Tensor) else torch.device("cpu")
+    if (
+        not isinstance(hand_poses, torch.Tensor)
+        or hand_poses.ndim != 2
+        or hand_poses.shape[1] != 23
+    ):
+        batch_dim = (
+            hand_poses.shape[0]
+            if isinstance(hand_poses, torch.Tensor) and hand_poses.ndim > 0
+            else 0
+        )
+        dtype = (
+            hand_poses.dtype if isinstance(hand_poses, torch.Tensor) else torch.float32
+        )
+        device = (
+            hand_poses.device
+            if isinstance(hand_poses, torch.Tensor)
+            else torch.device("cpu")
+        )
         return torch.zeros((batch_dim, 23), dtype=dtype, device=device)
 
     positions = hand_poses[:, :3]
@@ -484,8 +513,7 @@ def reorder_hand_pose_batch(hand_poses: torch.Tensor) -> torch.Tensor:
 
 
 def create_se3_matrices_from_pose_batch(
-    positions: torch.Tensor,
-    quaternions: torch.Tensor
+    positions: torch.Tensor, quaternions: torch.Tensor
 ) -> torch.Tensor:
     """
     Create batched SE(3) matrices from positions and quaternions.

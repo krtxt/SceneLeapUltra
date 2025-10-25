@@ -6,30 +6,34 @@ allowing different transformation modes to be handled in a clean, extensible way
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 import torch
+
 from .dataset_config import CONFIG
 
 
 class TransformationData:
     """
     Data container for coordinate transformation inputs and outputs.
-    
+
     This class encapsulates all the data needed for coordinate transformations
     and provides a clean interface for passing data between strategies.
     """
-    
-    def __init__(self, 
-                 pc_cam_raw_xyz_rgb: np.ndarray,
-                 grasps_omf: torch.Tensor,
-                 obj_verts: torch.Tensor,
-                 R_omf_to_cf_np: Optional[np.ndarray] = None,
-                 t_omf_to_cf_np: Optional[np.ndarray] = None,
-                 object_mask_np: Optional[np.ndarray] = None):
+
+    def __init__(
+        self,
+        pc_cam_raw_xyz_rgb: np.ndarray,
+        grasps_omf: torch.Tensor,
+        obj_verts: torch.Tensor,
+        R_omf_to_cf_np: Optional[np.ndarray] = None,
+        t_omf_to_cf_np: Optional[np.ndarray] = None,
+        object_mask_np: Optional[np.ndarray] = None,
+    ):
         """
         Initialize transformation data container.
-        
+
         Args:
             pc_cam_raw_xyz_rgb: Point cloud in camera frame with RGB (N, 6)
             grasps_omf: Hand poses in object model frame
@@ -43,67 +47,79 @@ class TransformationData:
         self.obj_verts = obj_verts
         self.R_omf_to_cf_np = R_omf_to_cf_np
         self.t_omf_to_cf_np = t_omf_to_cf_np
-        self.object_mask_np = object_mask_np if object_mask_np is not None else np.array([])
-        
+        self.object_mask_np = (
+            object_mask_np if object_mask_np is not None else np.array([])
+        )
+
         # Validate inputs
         self._validate_inputs()
-    
+
     def _validate_inputs(self):
         """Validate input data shapes and types."""
         if not isinstance(self.pc_cam_raw_xyz_rgb, np.ndarray):
             raise TypeError("pc_cam_raw_xyz_rgb must be numpy array")
-        
-        if self.pc_cam_raw_xyz_rgb.ndim != 2 or self.pc_cam_raw_xyz_rgb.shape[1] != CONFIG.PC_XYZRGB_DIM:
-            raise ValueError(f"pc_cam_raw_xyz_rgb must have shape (N, {CONFIG.PC_XYZRGB_DIM})")
-        
+
+        if (
+            self.pc_cam_raw_xyz_rgb.ndim != 2
+            or self.pc_cam_raw_xyz_rgb.shape[1] != CONFIG.PC_XYZRGB_DIM
+        ):
+            raise ValueError(
+                f"pc_cam_raw_xyz_rgb must have shape (N, {CONFIG.PC_XYZRGB_DIM})"
+            )
+
         if not isinstance(self.grasps_omf, torch.Tensor):
             raise TypeError("grasps_omf must be torch.Tensor")
-        
+
         if not isinstance(self.obj_verts, torch.Tensor):
             raise TypeError("obj_verts must be torch.Tensor")
-        
+
         # Validate transformation matrices if provided
         if self.R_omf_to_cf_np is not None:
-            if not isinstance(self.R_omf_to_cf_np, np.ndarray) or self.R_omf_to_cf_np.shape != (3, 3):
+            if not isinstance(
+                self.R_omf_to_cf_np, np.ndarray
+            ) or self.R_omf_to_cf_np.shape != (3, 3):
                 raise ValueError("R_omf_to_cf_np must be (3, 3) numpy array")
-        
+
         if self.t_omf_to_cf_np is not None:
-            if not isinstance(self.t_omf_to_cf_np, np.ndarray) or self.t_omf_to_cf_np.shape != (3,):
+            if not isinstance(
+                self.t_omf_to_cf_np, np.ndarray
+            ) or self.t_omf_to_cf_np.shape != (3,):
                 raise ValueError("t_omf_to_cf_np must be (3,) numpy array")
-    
+
     def has_valid_transform(self) -> bool:
         """Check if valid transformation matrices are available."""
-        return (self.R_omf_to_cf_np is not None and 
-                self.t_omf_to_cf_np is not None)
+        return self.R_omf_to_cf_np is not None and self.t_omf_to_cf_np is not None
 
 
 class CoordinateTransformStrategy(ABC):
     """
     Abstract base class for coordinate transformation strategies.
-    
+
     This class defines the interface that all coordinate transformation
     strategies must implement, following the Strategy design pattern.
     """
-    
+
     def __init__(self, mode_name: str):
         """
         Initialize the transformation strategy.
-        
+
         Args:
             mode_name: Name of the transformation mode
         """
         self.mode_name = mode_name
         if mode_name not in CONFIG.VALID_MODES:
-            raise ValueError(f"Invalid mode '{mode_name}'. Valid modes: {CONFIG.VALID_MODES}")
-    
+            raise ValueError(
+                f"Invalid mode '{mode_name}'. Valid modes: {CONFIG.VALID_MODES}"
+            )
+
     @abstractmethod
     def transform(self, data: TransformationData) -> Dict[str, Any]:
         """
         Apply coordinate transformation to the input data.
-        
+
         Args:
             data: TransformationData container with input data
-            
+
         Returns:
             Dict[str, Any]: Dictionary containing transformed data with keys:
                 - 'pc': Transformed point cloud (np.ndarray)
@@ -111,47 +127,50 @@ class CoordinateTransformStrategy(ABC):
                 - 'obj_verts': Transformed object vertices (torch.Tensor)
         """
         pass
-    
-    def _convert_numpy_to_tensor(self, array: np.ndarray, 
-                                device: torch.device, 
-                                dtype: torch.dtype = None) -> torch.Tensor:
+
+    def _convert_numpy_to_tensor(
+        self, array: np.ndarray, device: torch.device, dtype: torch.dtype = None
+    ) -> torch.Tensor:
         """
         Convert numpy array to torch tensor with specified device and dtype.
-        
+
         Args:
             array: Numpy array to convert
             device: Target device
             dtype: Target dtype (defaults to float32)
-            
+
         Returns:
             torch.Tensor: Converted tensor
         """
         if dtype is None:
             dtype = CONFIG.DEFAULT_DTYPE
-        
+
         return torch.from_numpy(array.astype(np.float32)).to(device=device, dtype=dtype)
-    
-    def _ensure_tensor_device_dtype(self, tensor: torch.Tensor, 
-                                   reference_tensor: torch.Tensor) -> torch.Tensor:
+
+    def _ensure_tensor_device_dtype(
+        self, tensor: torch.Tensor, reference_tensor: torch.Tensor
+    ) -> torch.Tensor:
         """
         Ensure tensor has same device and dtype as reference tensor.
-        
+
         Args:
             tensor: Tensor to convert
             reference_tensor: Reference tensor for device/dtype
-            
+
         Returns:
             torch.Tensor: Tensor with matching device/dtype
         """
         return tensor.to(device=reference_tensor.device, dtype=reference_tensor.dtype)
-    
-    def _handle_grasp_dimensions(self, grasps: torch.Tensor) -> Tuple[torch.Tensor, bool]:
+
+    def _handle_grasp_dimensions(
+        self, grasps: torch.Tensor
+    ) -> Tuple[torch.Tensor, bool]:
         """
         Handle different grasp tensor dimensions and return normalized format.
-        
+
         Args:
             grasps: Input grasp tensor, can be (23,) or (N, 23)
-            
+
         Returns:
             Tuple[torch.Tensor, bool]: (normalized_grasps, was_single_grasp)
                 - normalized_grasps: Always (N, 23) format
@@ -164,53 +183,61 @@ class CoordinateTransformStrategy(ABC):
             # Multiple grasps (N, 23)
             return grasps, False
         else:
-            raise ValueError(f"Invalid grasp tensor shape: {grasps.shape}. Expected (23,) or (N, 23)")
-    
-    def _restore_grasp_dimensions(self, grasps: torch.Tensor, was_single_grasp: bool) -> torch.Tensor:
+            raise ValueError(
+                f"Invalid grasp tensor shape: {grasps.shape}. Expected (23,) or (N, 23)"
+            )
+
+    def _restore_grasp_dimensions(
+        self, grasps: torch.Tensor, was_single_grasp: bool
+    ) -> torch.Tensor:
         """
         Restore original grasp tensor dimensions.
-        
+
         Args:
             grasps: Normalized grasp tensor (N, 23)
             was_single_grasp: Whether original input was single grasp
-            
+
         Returns:
             torch.Tensor: Grasp tensor in original format
         """
         if was_single_grasp and grasps.shape[0] == 1:
             return grasps.squeeze(0)  # (1, 23) -> (23,)
         return grasps
-    
-    def _extract_pose_components(self, grasps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    def _extract_pose_components(
+        self, grasps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Extract position, quaternion, and joint components from grasp poses.
-        
+
         Args:
             grasps: Grasp tensor with shape (N, 23)
-            
+
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (positions, quaternions, joints)
                 - positions: (N, 3) position vectors
                 - quaternions: (N, 4) quaternions in wxyz format
                 - joints: (N, 16) joint angles
         """
-        positions = grasps[:, :CONFIG.POSITION_DIM]
-        quaternions = grasps[:, CONFIG.POSITION_DIM:CONFIG.POSITION_DIM + CONFIG.QUATERNION_DIM]
-        joints = grasps[:, CONFIG.POSITION_DIM + CONFIG.QUATERNION_DIM:]
-        
+        positions = grasps[:, : CONFIG.POSITION_DIM]
+        quaternions = grasps[
+            :, CONFIG.POSITION_DIM : CONFIG.POSITION_DIM + CONFIG.QUATERNION_DIM
+        ]
+        joints = grasps[:, CONFIG.POSITION_DIM + CONFIG.QUATERNION_DIM :]
+
         return positions, quaternions, joints
-    
-    def _combine_pose_components(self, positions: torch.Tensor, 
-                                quaternions: torch.Tensor, 
-                                joints: torch.Tensor) -> torch.Tensor:
+
+    def _combine_pose_components(
+        self, positions: torch.Tensor, quaternions: torch.Tensor, joints: torch.Tensor
+    ) -> torch.Tensor:
         """
         Combine position, quaternion, and joint components into grasp poses.
-        
+
         Args:
             positions: (N, 3) position vectors
             quaternions: (N, 4) quaternions in wxyz format
             joints: (N, 16) joint angles
-            
+
         Returns:
             torch.Tensor: Combined grasp tensor (N, 23)
         """
@@ -251,16 +278,16 @@ class ObjectCentricStrategy(CoordinateTransformStrategy):
         # Transform point cloud to object model frame if transformation is available
         if data.has_valid_transform():
             pc_omf_xyz = transform_point_cloud(
-                data.pc_cam_raw_xyz_rgb[:, :3],
-                data.R_omf_to_cf_np,
-                data.t_omf_to_cf_np
+                data.pc_cam_raw_xyz_rgb[:, :3], data.R_omf_to_cf_np, data.t_omf_to_cf_np
             )
-            final_pc_xyz_rgb_np = np.hstack((pc_omf_xyz, data.pc_cam_raw_xyz_rgb[:, 3:6]))
+            final_pc_xyz_rgb_np = np.hstack(
+                (pc_omf_xyz, data.pc_cam_raw_xyz_rgb[:, 3:6])
+            )
 
         return {
-            'pc': final_pc_xyz_rgb_np,
-            'grasps': final_grasps,
-            'obj_verts': final_obj_verts
+            "pc": final_pc_xyz_rgb_np,
+            "grasps": final_grasps,
+            "obj_verts": final_obj_verts,
         }
 
 
@@ -294,9 +321,7 @@ class CameraCentricStrategy(CoordinateTransformStrategy):
         if data.has_valid_transform():
             # Transform grasps from OMF to CF
             final_grasps = transform_hand_poses_omf_to_cf(
-                data.grasps_omf,
-                data.R_omf_to_cf_np,
-                data.t_omf_to_cf_np
+                data.grasps_omf, data.R_omf_to_cf_np, data.t_omf_to_cf_np
             )
 
             # Transform object vertices from OMF to CF
@@ -307,12 +332,14 @@ class CameraCentricStrategy(CoordinateTransformStrategy):
                 t_omf_to_cf_tensor = self._convert_numpy_to_tensor(
                     data.t_omf_to_cf_np, data.obj_verts.device
                 )
-                final_obj_verts = torch.matmul(data.obj_verts, R_omf_to_cf_tensor.T) + t_omf_to_cf_tensor.unsqueeze(0)
+                final_obj_verts = torch.matmul(
+                    data.obj_verts, R_omf_to_cf_tensor.T
+                ) + t_omf_to_cf_tensor.unsqueeze(0)
 
         return {
-            'pc': final_pc_xyz_rgb_np,
-            'grasps': final_grasps,
-            'obj_verts': final_obj_verts
+            "pc": final_pc_xyz_rgb_np,
+            "grasps": final_grasps,
+            "obj_verts": final_obj_verts,
         }
 
 
@@ -370,7 +397,9 @@ class CameraCentricObjNormalizedStrategy(CoordinateTransformStrategy):
             t_omf_to_cf_tensor = self._convert_numpy_to_tensor(
                 data.t_omf_to_cf_np, data.obj_verts.device
             )
-            obj_verts_cf = torch.matmul(data.obj_verts, R_omf_to_cf_tensor.T) + t_omf_to_cf_tensor.unsqueeze(0)
+            obj_verts_cf = torch.matmul(
+                data.obj_verts, R_omf_to_cf_tensor.T
+            ) + t_omf_to_cf_tensor.unsqueeze(0)
 
         obj_mean_cf_tensor_for_verts = self._convert_numpy_to_tensor(
             obj_mean_cf_for_norm, obj_verts_cf.device
@@ -378,12 +407,14 @@ class CameraCentricObjNormalizedStrategy(CoordinateTransformStrategy):
         final_obj_verts = obj_verts_cf - obj_mean_cf_tensor_for_verts.unsqueeze(0)
 
         return {
-            'pc': final_pc_xyz_rgb_np,
-            'grasps': final_grasps,
-            'obj_verts': final_obj_verts
+            "pc": final_pc_xyz_rgb_np,
+            "grasps": final_grasps,
+            "obj_verts": final_obj_verts,
         }
 
-    def _normalize_grasps_by_mean(self, grasps: torch.Tensor, mean_vector: np.ndarray) -> torch.Tensor:
+    def _normalize_grasps_by_mean(
+        self, grasps: torch.Tensor, mean_vector: np.ndarray
+    ) -> torch.Tensor:
         """
         Normalize grasp positions by subtracting mean vector.
 
@@ -397,13 +428,23 @@ class CameraCentricObjNormalizedStrategy(CoordinateTransformStrategy):
         # Handle both single grasp (23,) and multiple grasps (N, 23) cases
         grasps_normalized, was_single_grasp = self._handle_grasp_dimensions(grasps)
 
-        if grasps_normalized.numel() > 0 and grasps_normalized.shape[0] > 0 and grasps_normalized.shape[1] == CONFIG.POSE_DIM:
-            positions, quaternions, joints = self._extract_pose_components(grasps_normalized)
+        if (
+            grasps_normalized.numel() > 0
+            and grasps_normalized.shape[0] > 0
+            and grasps_normalized.shape[1] == CONFIG.POSE_DIM
+        ):
+            positions, quaternions, joints = self._extract_pose_components(
+                grasps_normalized
+            )
 
-            mean_tensor = self._convert_numpy_to_tensor(mean_vector, grasps_normalized.device)
+            mean_tensor = self._convert_numpy_to_tensor(
+                mean_vector, grasps_normalized.device
+            )
             positions_shifted = positions - mean_tensor.unsqueeze(0)
 
-            grasps_transformed = self._combine_pose_components(positions_shifted, quaternions, joints)
+            grasps_transformed = self._combine_pose_components(
+                positions_shifted, quaternions, joints
+            )
             return self._restore_grasp_dimensions(grasps_transformed, was_single_grasp)
         else:
             return grasps  # Keep as is if invalid
@@ -461,7 +502,9 @@ class CameraCentricSceneNormalizedStrategy(CoordinateTransformStrategy):
             t_omf_to_cf_tensor = self._convert_numpy_to_tensor(
                 data.t_omf_to_cf_np, data.obj_verts.device
             )
-            obj_verts_cf = torch.matmul(data.obj_verts, R_omf_to_cf_tensor.T) + t_omf_to_cf_tensor.unsqueeze(0)
+            obj_verts_cf = torch.matmul(
+                data.obj_verts, R_omf_to_cf_tensor.T
+            ) + t_omf_to_cf_tensor.unsqueeze(0)
 
         scene_mean_cf_tensor_for_verts = self._convert_numpy_to_tensor(
             scene_mean_cf_for_norm, obj_verts_cf.device
@@ -469,12 +512,14 @@ class CameraCentricSceneNormalizedStrategy(CoordinateTransformStrategy):
         final_obj_verts = obj_verts_cf - scene_mean_cf_tensor_for_verts.unsqueeze(0)
 
         return {
-            'pc': final_pc_xyz_rgb_np,
-            'grasps': final_grasps,
-            'obj_verts': final_obj_verts
+            "pc": final_pc_xyz_rgb_np,
+            "grasps": final_grasps,
+            "obj_verts": final_obj_verts,
         }
 
-    def _normalize_grasps_by_mean(self, grasps: torch.Tensor, mean_vector: np.ndarray) -> torch.Tensor:
+    def _normalize_grasps_by_mean(
+        self, grasps: torch.Tensor, mean_vector: np.ndarray
+    ) -> torch.Tensor:
         """
         Normalize grasp positions by subtracting mean vector.
 
@@ -488,13 +533,23 @@ class CameraCentricSceneNormalizedStrategy(CoordinateTransformStrategy):
         # Handle both single grasp (23,) and multiple grasps (N, 23) cases
         grasps_normalized, was_single_grasp = self._handle_grasp_dimensions(grasps)
 
-        if grasps_normalized.numel() > 0 and grasps_normalized.shape[0] > 0 and grasps_normalized.shape[1] == CONFIG.POSE_DIM:
-            positions, quaternions, joints = self._extract_pose_components(grasps_normalized)
+        if (
+            grasps_normalized.numel() > 0
+            and grasps_normalized.shape[0] > 0
+            and grasps_normalized.shape[1] == CONFIG.POSE_DIM
+        ):
+            positions, quaternions, joints = self._extract_pose_components(
+                grasps_normalized
+            )
 
-            mean_tensor = self._convert_numpy_to_tensor(mean_vector, grasps_normalized.device)
+            mean_tensor = self._convert_numpy_to_tensor(
+                mean_vector, grasps_normalized.device
+            )
             positions_shifted = positions - mean_tensor.unsqueeze(0)
 
-            grasps_transformed = self._combine_pose_components(positions_shifted, quaternions, joints)
+            grasps_transformed = self._combine_pose_components(
+                positions_shifted, quaternions, joints
+            )
             return self._restore_grasp_dimensions(grasps_transformed, was_single_grasp)
         else:
             return grasps  # Keep as is if invalid
@@ -522,4 +577,6 @@ def create_transform_strategy(mode: str) -> CoordinateTransformStrategy:
     elif mode == "camera_centric_scene_mean_normalized":
         return CameraCentricSceneNormalizedStrategy()
     else:
-        raise ValueError(f"Unsupported transformation mode: {mode}. Valid modes: {CONFIG.VALID_MODES}")
+        raise ValueError(
+            f"Unsupported transformation mode: {mode}. Valid modes: {CONFIG.VALID_MODES}"
+        )

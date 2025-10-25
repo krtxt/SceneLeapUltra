@@ -1,6 +1,8 @@
 import logging
 from typing import Dict
-from .log_colors import HEADER, BLUE, GREEN, ENDC
+
+from .log_colors import BLUE, ENDC, GREEN, HEADER
+
 # from .text_utils import convert_number_to_emoji
 
 number_emoji_map = {

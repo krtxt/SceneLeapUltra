@@ -16,11 +16,13 @@ WandB回调函数模块
 """
 
 import logging
-import torch
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import Optional, Dict, Any, List
 import pytorch_lightning as pl
+import torch
 from pytorch_lightning.callbacks import Callback
+
 from utils.distributed_utils import is_main_process
 
 logger = logging.getLogger(__name__)

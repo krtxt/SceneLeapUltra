@@ -8,15 +8,16 @@ This module provides memory optimization features including:
 - Scalable batch processing
 """
 
+import gc
+import logging
+import math
+from contextlib import contextmanager
+from typing import Any, Dict, Optional, Tuple
+
+import psutil
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
-import psutil
-import logging
-from typing import Optional, Tuple, Dict, Any
-from contextlib import contextmanager
-import gc
-import math
 
 
 class MemoryMonitor:

@@ -1,7 +1,8 @@
 from .pointnet2 import Pointnet2Backbone
 from .pointnet2_3sa import Pointnet2Backbone_3sa
-from .resnet import build_resnet_backbone
 from .ptv3 import PTv3Backbone
+from .resnet import build_resnet_backbone
+
 
 def build_backbone(backbone_cfg):
     if backbone_cfg.name.lower() == "resnet":

@@ -3,62 +3,56 @@ SceneLeapPro Cached Dataset Implementation
 Efficient HDF5-based cached version supporting text conditions and 6D point cloud data
 """
 
-import os
-import json
-import torch
-import numpy as np
-import h5py
-import hashlib
-import logging
 import atexit
+import hashlib
+import json
+import logging
+import os
 import time
-from typing import Optional, List, Dict, Any, Union
+from typing import Any, Dict, List, Optional, Union
+
+import h5py
+import numpy as np
+import torch
 from tqdm import tqdm
 
 try:
-    from datasets.sceneleappro_dataset import SceneLeapProDataset, ForMatchSceneLeapProDataset
-    from datasets.utils.common_utils import CameraInfo
-    from datasets.utils.distributed_utils import (
-        is_distributed_training,
-        is_main_process,
-        distributed_barrier,
-        get_rank_info,
-        ensure_directory_exists,
-        should_create_cache,
-        get_distributed_info
-    )
-    from datasets.utils.cache_utils import (
-        wait_for_file,
-        generate_cache_filename,
-        validate_cache_file,
-        check_cache_health,
-        get_cache_directory,
-        cleanup_cache_file,
-        get_cache_info,
-        log_cache_status,
-        CacheManager
-    )
-    from datasets.utils.hdf5_utils import (
-        save_value_to_group,
-        load_item_from_cache,
-        load_dataset_from_group,
-        create_error_group,
-        create_data_group,
-        get_default_cache_keys,
-        get_default_error_values
-    )
-    from datasets.utils.error_utils import (
-        log_dataset_warning,
-        handle_loading_exception
-    )
-    from datasets.utils.dataset_config import CachedDatasetConfig
-    from datasets.utils.data_formatters import DataFormatter, ForMatchDataFormatter
+    from datasets.sceneleappro_dataset import (ForMatchSceneLeapProDataset,
+                                               SceneLeapProDataset)
+    from datasets.utils.cache_utils import (CacheManager, check_cache_health,
+                                            cleanup_cache_file,
+                                            generate_cache_filename,
+                                            get_cache_directory,
+                                            get_cache_info, log_cache_status,
+                                            validate_cache_file, wait_for_file)
     from datasets.utils.collate_utils import BatchCollator
-    from datasets.utils.constants import (
-        DEFAULT_MODE, DEFAULT_MAX_GRASPS_PER_OBJECT, DEFAULT_MESH_SCALE,
-        DEFAULT_NUM_NEG_PROMPTS, DEFAULT_ENABLE_CROPPING, DEFAULT_MAX_POINTS,
-        DEFAULT_CACHE_VERSION, DEFAULT_FORMATCH_CACHE_VERSION
-    )
+    from datasets.utils.common_utils import CameraInfo
+    from datasets.utils.constants import (DEFAULT_CACHE_VERSION,
+                                          DEFAULT_ENABLE_CROPPING,
+                                          DEFAULT_FORMATCH_CACHE_VERSION,
+                                          DEFAULT_MAX_GRASPS_PER_OBJECT,
+                                          DEFAULT_MAX_POINTS,
+                                          DEFAULT_MESH_SCALE, DEFAULT_MODE,
+                                          DEFAULT_NUM_NEG_PROMPTS)
+    from datasets.utils.data_formatters import (DataFormatter,
+                                                ForMatchDataFormatter)
+    from datasets.utils.dataset_config import CachedDatasetConfig
+    from datasets.utils.distributed_utils import (distributed_barrier,
+                                                  ensure_directory_exists,
+                                                  get_distributed_info,
+                                                  get_rank_info,
+                                                  is_distributed_training,
+                                                  is_main_process,
+                                                  should_create_cache)
+    from datasets.utils.error_utils import (handle_loading_exception,
+                                            log_dataset_warning)
+    from datasets.utils.hdf5_utils import (create_data_group,
+                                           create_error_group,
+                                           get_default_cache_keys,
+                                           get_default_error_values,
+                                           load_dataset_from_group,
+                                           load_item_from_cache,
+                                           save_value_to_group)
 except ImportError:
     logging.warning("Could not import SceneLeapProDataset. Using dummy implementation for demonstration.")
 

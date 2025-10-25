@@ -13,8 +13,6 @@ Pointcept detached version
 Author: Xiaoyang Wu (xiaoyang.wu.cs@gmail.com)
 Please cite our work if the code is helpful to you.
 """
-# from timm.models.layers import DropPath
-from timm.layers import DropPath
 import math
 import sys
 from collections import OrderedDict
@@ -25,6 +23,8 @@ import torch
 import torch.nn as nn
 import torch_scatter
 from addict import Dict
+# from timm.models.layers import DropPath
+from timm.layers import DropPath
 
 try:
     import flash_attn

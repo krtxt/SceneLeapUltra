@@ -1,19 +1,16 @@
-import torch
-import torch.nn as nn
 import logging
 from typing import Dict
+
+import torch
+import torch.nn as nn
 from einops import rearrange
-import logging
 
-
-from models.utils.diffusion_utils import (
-    timestep_embedding,
-    ResBlock,
-    SpatialTransformer,
-    GraspNet,
-)
 from models.backbone import build_backbone
-from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
+from models.utils.diffusion_utils import (GraspNet, ResBlock,
+                                          SpatialTransformer,
+                                          timestep_embedding)
+from models.utils.text_encoder import PosNegTextEncoder, TextConditionProcessor
+
 
 class UNetModel(nn.Module):
     """

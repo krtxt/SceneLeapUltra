@@ -5,27 +5,22 @@ This module contains configuration classes for SceneLeapPro dataset implementati
 Constants and default values are now centralized in constants.py.
 """
 
-from typing import Dict, Any, Optional, List
-import torch
-import os
 import hashlib
+import os
 from dataclasses import dataclass, field
-from .constants import (
-    # Dimensions
-    POSE_DIM, POSITION_DIM, QUATERNION_DIM, JOINTS_DIM, SE3_SHAPE,
-    PC_XYZ_DIM, PC_RGB_DIM, PC_XYZRGB_DIM,
-    # Default values
-    DEFAULT_MODE, DEFAULT_MAX_GRASPS_PER_OBJECT, DEFAULT_MESH_SCALE,
-    DEFAULT_NUM_NEG_PROMPTS, DEFAULT_ENABLE_CROPPING, DEFAULT_MAX_POINTS,
-    DEFAULT_CACHE_VERSION, DEFAULT_CACHE_MODE,
-    # Data types
-    DEFAULT_DTYPE, DEFAULT_DEVICE, DEFAULT_LONG_DTYPE, DEFAULT_BOOL_DTYPE,
-    # Validation
-    VALID_COORDINATE_MODES, VALID_CACHE_MODES,
-    # Error handling
-    PADDING_VALUE, IDENTITY_QUATERNION, QUATERNION_NORM_THRESHOLD,
-    ALL_CACHE_KEYS, MIN_POSE_SHAPE, BATCH_POSE_SHAPE_SUFFIX, SE3_MATRIX_SHAPE
-)
+from typing import Any, Dict, List, Optional
+
+import torch
+
+from .constants import (  # Dimensions; Default values; Data types; Validation; Error handling
+    ALL_CACHE_KEYS, BATCH_POSE_SHAPE_SUFFIX, DEFAULT_BOOL_DTYPE,
+    DEFAULT_CACHE_MODE, DEFAULT_CACHE_VERSION, DEFAULT_DEVICE, DEFAULT_DTYPE,
+    DEFAULT_ENABLE_CROPPING, DEFAULT_LONG_DTYPE, DEFAULT_MAX_GRASPS_PER_OBJECT,
+    DEFAULT_MAX_POINTS, DEFAULT_MESH_SCALE, DEFAULT_MODE,
+    DEFAULT_NUM_NEG_PROMPTS, IDENTITY_QUATERNION, JOINTS_DIM, MIN_POSE_SHAPE,
+    PADDING_VALUE, PC_RGB_DIM, PC_XYZ_DIM, PC_XYZRGB_DIM, POSE_DIM,
+    POSITION_DIM, QUATERNION_DIM, QUATERNION_NORM_THRESHOLD, SE3_MATRIX_SHAPE,
+    SE3_SHAPE, VALID_CACHE_MODES, VALID_COORDINATE_MODES)
 
 
 @dataclass

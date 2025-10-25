@@ -1,5 +1,6 @@
 import subprocess
 
+
 def get_git_head_hash():
     """Get current git commit hash"""
     try:

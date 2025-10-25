@@ -1,4 +1,5 @@
 from typing import Dict
+
 import torch
 
 # 手部姿态向量切片常量（与 DiffuserLightning 保持一致）
