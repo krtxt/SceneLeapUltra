@@ -24,14 +24,21 @@ use_negative_prompts: ${use_negative_prompts}
 use_object_mask: ${use_object_mask}
 use_rgb: ${use_rgb}
 
-attention_dropout: 0.1
-cross_attention_dropout: 0.1
+# Attention dropout configuration
+# attention_dropout: 应用于self-attention的softmax后dropout概率，用于正则化防止过拟合
+# cross_attention_dropout: 应用于cross-attention的softmax后dropout概率
+# 默认设置为0.0（禁用），训练时可根据需要启用（推荐0.05-0.1）
+attention_dropout: 0.0
+cross_attention_dropout: 0.0
 
 ff_mult: 4
 ff_dropout: 0.1
 
+# Memory optimization
+# 注意：如果使用 PyTorch 2.0+，模型会自动优先使用 SDPA (scaled_dot_product_attention)
+# SDPA 会自动选择最快的后端（FlashAttention 2、Memory-efficient 或 Math），无需手动配置
 gradient_checkpointing: false
-use_flash_attention: true
+use_flash_attention: true  # 仅在 SDPA 不可用时作为回退选项
 attention_chunk_size: 512
 memory_monitoring: false
 max_batch_size: 32
