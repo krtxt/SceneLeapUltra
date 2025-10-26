@@ -62,3 +62,89 @@ q1:
   thres_pen: 0.005
   thres_tpen: 0.01
   rot_type: ${rot_type}
+
+# ============================================================================
+# Set-based Grasp Learning Configuration
+# ============================================================================
+
+# Set Distance Configuration
+# Defines the grasp element distance function c(g, g') for all set losses/metrics
+set_distance:
+  # Distance component weights
+  alpha_translation: 1.0      # Weight for translation distance
+  alpha_rotation: 1.0         # Weight for rotation distance (geodesic on SO(3))
+  alpha_qpos: 0.5             # Weight for joint angle distance
+  alpha_symmetry: 0.0         # Weight for symmetry-aware rotation (0 = disabled)
+  alpha_contact: 0.0          # Weight for contact distance (0 = disabled)
+  
+  # Distance computation settings
+  rot_type: ${rot_type}       # Rotation representation (rot6d, quat, etc.)
+  normalize_translation: true # Normalize translation by object scale
+  qpos_range: [0.0, 1.0]      # Joint angle range for normalization
+  use_symmetry: false         # Enable symmetry-aware distance
+  symmetry_group: null        # Symmetry transformation matrices (if available)
+
+# Set Loss Configuration
+# Losses for aligning predicted and target grasp sets
+set_loss:
+  enabled: false              # Master switch for set-based losses
+  
+  # Loss weights
+  lambda_ot: 1.0              # Weight for Optimal Transport loss
+  gamma_cd: 0.0               # Weight for Chamfer Distance loss
+  eta_repulsion: 0.1          # Weight for Repulsion (diversity) loss
+  zeta_physics: 0.0           # Weight for Physics Feasibility loss
+  
+  # Timestep scheduling for set losses
+  # Set loss weight = lambda_set(t) * individual_loss_weight
+  schedule_type: "constant"   # Options: constant, linear, cosine, quadratic
+  final_weight: 1.0           # Final weight at t=0 (for non-constant schedules)
+  
+  # Optimal Transport Loss Configuration
+  ot_config:
+    epsilon: 0.1              # Entropic regularization parameter
+    tau: 1.0                  # Unbalanced regularization parameter
+    max_iter: 100             # Maximum Sinkhorn iterations
+    threshold: 1e-3           # Convergence threshold
+    max_samples: 256          # Maximum samples for efficiency (subsample if exceeded)
+  
+  # Chamfer Distance Loss Configuration
+  cd_config: {}               # No specific parameters currently
+  
+  # Repulsion Loss Configuration (diversity regularization)
+  repulsion_config:
+    k: 5                      # Number of nearest neighbors to consider
+    lambda_repulsion: 1.0     # Repulsion strength
+    delta: 0.01               # Regularization to avoid singularity
+    s: 2.0                    # Riesz parameter
+  
+  # Physics Feasibility Loss Configuration
+  physics_config:
+    penetration_weight: 1.0   # Weight for penetration penalty
+    contact_weight: 0.5       # Weight for contact consistency
+    penetration_threshold: 0.005  # Threshold for penetration (from q1 config)
+
+# Set Metrics Configuration
+# Metrics for evaluating predicted grasp sets during validation
+set_metrics:
+  enabled: false              # Master switch for set-based metrics
+  
+  # Metric enable flags
+  compute_coverage: true      # Compute Coverage (COV) metrics
+  compute_mmd: true           # Compute Minimum Matching Distance (MMD)
+  compute_diversity: true     # Compute diversity metrics (NND stats)
+  compute_precision_recall: false  # Compute Precision/Recall (optional)
+  
+  # Coverage Metric Configuration
+  coverage_config:
+    thresholds: [0.05, 0.1, 0.2]  # Distance thresholds for coverage
+  
+  # MMD Metric Configuration
+  mmd_config: {}              # No specific parameters currently
+  
+  # Diversity Metric Configuration
+  diversity_config: {}        # No specific parameters currently
+  
+  # Precision/Recall Metric Configuration
+  pr_config:
+    threshold: 0.1            # Distance threshold for matching
