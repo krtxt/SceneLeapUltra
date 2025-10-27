@@ -1,7 +1,0 @@
-input_dim: &latent_dim 64
-condition_dim: &condition_out 512
-hidden_dim: 128
-output_dim: 28
-dropout_prob: 0.1
-rot_type: ${rot_type}
-                                                                                                                                                                            

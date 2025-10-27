@@ -11,6 +11,8 @@ bin/
 lightning_logs/
 assets/
 third_party/
+/docs/
+/tests/
 __pycache__/
 *.pyc
 *.ipynb
