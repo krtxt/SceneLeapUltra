@@ -221,8 +221,9 @@ class FlowMatchingLightning(pl.LightningModule):
             # Compute additional losses (optional)
             loss_dict = self.criterion(pred_dict, processed_batch, mode='train')
             
-            # Use only MSE loss for now, can integrate other losses later
-            total_loss = loss  # Could add: + sum(v * self.loss_weights[k] for k, v in loss_dict.items() if k != 'noise_loss')
+            # Augment core loss with set-level components when enabled
+            set_contrib = self.criterion.get_weighted_set_loss(loss_dict)
+            total_loss = loss + set_contrib
         else:
             total_loss = loss
             loss_dict = {'velocity_loss': loss}
@@ -287,6 +288,7 @@ class FlowMatchingLightning(pl.LightningModule):
                 for k, v in loss_dict.items()
                 if k in std_weights and std_weights[k] > 0
             )
+            loss = loss + self.criterion.get_weighted_set_loss(loss_dict)
 
             # Calculate standard total loss for comparison
             standard_loss = sum(
@@ -294,6 +296,7 @@ class FlowMatchingLightning(pl.LightningModule):
                 for k, v in standard_loss_dict.items()
                 if k in self.loss_weights
             )
+            standard_loss = standard_loss + self.criterion.get_weighted_set_loss(standard_loss_dict)
 
             # Log both losses
             self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
@@ -310,17 +313,18 @@ class FlowMatchingLightning(pl.LightningModule):
             })
         else:
             # Standard validation loss calculation
-            loss = sum(
-                v * self.loss_weights[k]
-                for k, v in loss_dict.items()
-                if k in self.loss_weights and torch.is_tensor(v)
-            )
+            loss = self.criterion.aggregate_total_loss(loss_dict, base_weights=self.loss_weights)
             self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
 
             self.validation_step_outputs.append({
                 "loss": loss.item(),
                 "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
             })
+
+        metric_values = self.criterion.compute_set_metrics(pred_dict, batch)
+        if metric_values:
+            metric_log = {f"val/{k}": v for k, v in metric_values.items()}
+            self.log_dict(metric_log, prog_bar=False, logger=True, on_step=False, on_epoch=True, batch_size=batch_size, sync_dist=True)
 
         return {"loss": loss, "loss_dict": loss_dict}
     

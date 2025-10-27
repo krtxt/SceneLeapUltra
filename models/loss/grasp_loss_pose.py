@@ -1,7 +1,8 @@
 import logging
+import math
 import os
 from statistics import mean
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pytorch3d.ops
@@ -9,10 +10,13 @@ import pytorch3d.structures
 import pytorch3d.transforms
 import torch
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 from pytorch3d.loss import chamfer_distance
 from torch import nn
 from torch.functional import Tensor
 
+from models.loss.set_ops import chamfer_set_loss, pairwise_cost, sinkhorn_ot_loss
+from models.metrics.set_metrics import SetMetricsEvaluator
 from models.utils import loss_components
 from models.utils.grasp_evaluator import GraspMetricCalculator
 from models.utils.pose_processor import PoseProcessor
@@ -67,6 +71,79 @@ class GraspLossPose(nn.Module):
             self.use_standardized_val_loss = False
             logging.info("Using standard validation loss (same as training loss)")
 
+        # Set-level loss configuration
+        self.set_loss_cfg = getattr(loss_cfg, 'set_loss', None)
+        base_cost_weights = self._to_plain_dict(loss_cfg.cost_weights)
+        self.set_cost_weights = {}
+        for key, value in base_cost_weights.items():
+            numeric_value = self._try_float(value)
+            if numeric_value is not None:
+                self.set_cost_weights[key] = numeric_value
+
+        self.set_loss_enabled = False
+        self.set_loss_weights = {}
+        self.set_schedule_cfg = {}
+        self.set_loss_default_weight = 1.0
+        self.set_ot_cfg = {}
+        self.set_repulsion_cfg = {}
+        self._last_set_weight = 0.0
+        self._last_set_weight_tensor = None
+        self._set_schedule_warned = False
+
+        if self.set_loss_cfg:
+            set_loss_cfg_dict = self._to_plain_dict(self.set_loss_cfg)
+            self.set_loss_enabled = bool(set_loss_cfg_dict.get('enable', False))
+            self.set_schedule_cfg = self._to_plain_dict(set_loss_cfg_dict.get('schedule')) if set_loss_cfg_dict.get('schedule') is not None else {}
+            if self.set_schedule_cfg:
+                schedule_weight = self._try_float(self.set_schedule_cfg.get('final_weight', 1.0))
+                if schedule_weight is not None:
+                    self.set_loss_default_weight = schedule_weight
+            cost_override = set_loss_cfg_dict.get('cost_weights')
+            if cost_override is not None:
+                override_dict = self._to_plain_dict(cost_override)
+                for key, value in override_dict.items():
+                    numeric_value = self._try_float(value)
+                    if numeric_value is not None:
+                        self.set_cost_weights[key] = numeric_value
+                    else:
+                        logging.warning(f"[SetLoss] Ignoring non-numeric cost weight '{key}': {value}")
+            weights_cfg = self._to_plain_dict(set_loss_cfg_dict.get('weights')) if set_loss_cfg_dict.get('weights') is not None else {}
+            self.set_loss_weights = {
+                key: val for key, val in (
+                    (k, self._try_float(v)) for k, v in weights_cfg.items()
+                ) if val is not None and val > 0
+            }
+            self.set_ot_cfg = self._to_plain_dict(set_loss_cfg_dict.get('ot')) if set_loss_cfg_dict.get('ot') is not None else {}
+            self.set_repulsion_cfg = self._to_plain_dict(set_loss_cfg_dict.get('repulsion')) if set_loss_cfg_dict.get('repulsion') is not None else {}
+
+            if self.set_loss_enabled and not self.set_loss_weights:
+                logging.warning("Set loss enabled but no positive component weights provided; disabling set loss.")
+                self.set_loss_enabled = False
+
+            if self.set_loss_enabled:
+                logging.info(f"Set loss enabled with weights: {self.set_loss_weights} and base weight {self.set_loss_default_weight}")
+        else:
+            self.set_loss_cfg = None
+
+        # Set metrics configuration
+        self.set_metrics_cfg = getattr(loss_cfg, 'set_metrics', None)
+        self.set_metrics_evaluator = None
+        if self.set_metrics_cfg:
+            set_metrics_cfg_dict = self._to_plain_dict(self.set_metrics_cfg)
+            if bool(set_metrics_cfg_dict.get('enable', False)):
+                try:
+                    self.set_metrics_evaluator = SetMetricsEvaluator(
+                        set_metrics_cfg_dict,
+                        rot_type=self.rot_type,
+                        cost_weights=self.set_cost_weights
+                    )
+                    logging.info("Set metrics evaluator initialized.")
+                except Exception as e:
+                    logging.error(f"Failed to initialize set metrics evaluator: {e}")
+                    self.set_metrics_evaluator = None
+
+        self.set_metrics_enabled = self.set_metrics_evaluator is not None
+
         self._init_loss_functions()
         self.metric_calculator = GraspMetricCalculator(self.q1_cfg, self.hand_model, self.scale)
         self.pose_processor = PoseProcessor(self.hand_model, self.rot_type, self.mode)
@@ -91,6 +168,42 @@ class GraspLossPose(nn.Module):
             "consistency": loss_components.calculate_consistency_loss,
             "diversity": loss_components.calculate_diversity_loss,
         }
+
+    @staticmethod
+    def _to_plain_dict(cfg):
+        if cfg is None:
+            return {}
+        if isinstance(cfg, dict):
+            return dict(cfg)
+        try:
+            if OmegaConf.is_config(cfg):
+                container = OmegaConf.to_container(cfg, resolve=True)
+                if isinstance(container, dict):
+                    return container
+                return {}
+        except Exception:
+            pass
+        try:
+            return dict(cfg)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _try_float(value):
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _zero_like(loss_dict):
+        if isinstance(loss_dict, dict):
+            for value in loss_dict.values():
+                if isinstance(value, torch.Tensor):
+                    return value.new_tensor(0.0)
+        return torch.tensor(0.0)
 
     def _get_device(self, *tensors):
         """
@@ -200,6 +313,9 @@ class GraspLossPose(nn.Module):
             self.train_val_hand_model_kwargs["with_contact_candidates"] = True
         if "cmap" in self.loss_weights:
             self.train_val_hand_model_kwargs["with_distance"] = True
+        if self.set_loss_enabled and self.set_loss_weights.get('phys'):
+            self.train_val_hand_model_kwargs["with_penetration"] = True
+            self.train_val_hand_model_kwargs["with_penetration_keypoints"] = True
 
         logging.info(f"GraspLossPose initialized. train_val_hand_model_kwargs: {self.train_val_hand_model_kwargs}")
 
@@ -289,7 +405,173 @@ class GraspLossPose(nn.Module):
                 available_losses = list(self.loss_func_map.keys())
                 raise NotImplementedError(f"Unable to calculate {name} loss. Available losses: {available_losses}")
 
+        set_loss_values = self._calculate_set_losses(outputs, targets)
+        losses.update(set_loss_values)
+
         return losses
+
+    def _calculate_set_losses(self, outputs, targets):
+        if not self.set_loss_enabled:
+            self._last_set_weight = 0.0
+            self._last_set_weight_tensor = None
+            return {}
+
+        try:
+            matched_preds = outputs.get('matched', outputs)
+            matched_targets = targets.get('matched', targets)
+
+            pred_pose = matched_preds.get('pred_pose_norm') if isinstance(matched_preds, dict) else None
+            target_pose = matched_targets.get('norm_pose') if isinstance(matched_targets, dict) else None
+
+            if pred_pose is None or target_pose is None:
+                logging.debug("[SetLoss] Missing pred_pose_norm or norm_pose; skipping set loss computation.")
+                return {}
+
+            if pred_pose.dim() == 2:
+                pred_pose = pred_pose.unsqueeze(1)
+            if target_pose.dim() == 2:
+                target_pose = target_pose.unsqueeze(1)
+
+            valid_mask = target_pose.abs().sum(dim=-1) > 0
+            has_valid = valid_mask.any(dim=1)
+            if not torch.any(has_valid):
+                lambda_set = self._resolve_set_weight(matched_preds, matched_targets)
+                self._last_set_weight = lambda_set
+                self._last_set_weight_tensor = pred_pose.new_tensor(lambda_set)
+                return {"set_weight": self._last_set_weight_tensor}
+
+            cost_matrix = pairwise_cost(
+                matched_preds,
+                matched_targets,
+                weights=self.set_cost_weights,
+                rot_type=self.rot_type,
+                valid_mask=valid_mask
+            )
+
+            lambda_set = self._resolve_set_weight(matched_preds, matched_targets)
+            self._last_set_weight = lambda_set
+            weight_tensor = cost_matrix.new_tensor(lambda_set)
+            self._last_set_weight_tensor = weight_tensor
+
+            set_losses = {"set_weight": weight_tensor}
+            weighted_terms = []
+
+            cd_weight = self.set_loss_weights.get('cd')
+            if cd_weight:
+                cd_loss = chamfer_set_loss(cost_matrix, valid_mask=valid_mask)
+                set_losses['set_cd'] = cd_loss
+                weighted_terms.append(cd_loss * cd_weight)
+
+            ot_weight = self.set_loss_weights.get('ot')
+            if ot_weight:
+                subsample = int(self.set_ot_cfg.get('subsample', 0) or 0)
+                ot_cost_matrix = cost_matrix
+                ot_mask = valid_mask
+                if subsample > 0:
+                    ot_cost_matrix, ot_mask = self._subsample_cost_matrix(ot_cost_matrix, ot_mask, subsample)
+                ot_loss = sinkhorn_ot_loss(
+                    ot_cost_matrix,
+                    eps=self._try_float(self.set_ot_cfg.get('eps', 0.05)) or 0.05,
+                    tau=self._try_float(self.set_ot_cfg.get('tau', 0.5)) or 0.5,
+                    iters=int(self.set_ot_cfg.get('iters', 50) or 50),
+                    valid_mask=ot_mask
+                )
+                set_losses['set_ot'] = ot_loss
+                weighted_terms.append(ot_loss * ot_weight)
+
+            rep_weight = self.set_loss_weights.get('repulsion')
+            if rep_weight:
+                repulsion_loss = loss_components.calculate_diversity_loss(outputs, targets)
+                set_losses['set_repulsion'] = repulsion_loss
+                weighted_terms.append(repulsion_loss * rep_weight)
+
+            phys_weight = self.set_loss_weights.get('phys')
+            if phys_weight:
+                phys_loss = loss_components.calculate_obj_penetration_loss(outputs, targets)
+                set_losses['set_phys'] = phys_loss
+                weighted_terms.append(phys_loss * phys_weight)
+
+            if weighted_terms:
+                total_raw = torch.stack(weighted_terms).sum()
+                set_losses['set_total_raw'] = total_raw
+                set_losses['set_total'] = total_raw * weight_tensor
+            else:
+                zero_tensor = cost_matrix.new_tensor(0.0)
+                set_losses['set_total_raw'] = zero_tensor
+                set_losses['set_total'] = zero_tensor
+
+            return set_losses
+        except Exception as exc:
+            logging.error(f"[SetLoss] Failed to compute set losses: {exc}")
+            self._last_set_weight = 0.0
+            self._last_set_weight_tensor = None
+            return {}
+
+    @staticmethod
+    def _subsample_cost_matrix(cost_matrix, valid_mask, max_samples):
+        if max_samples <= 0:
+            return cost_matrix, valid_mask
+        limit = min(cost_matrix.shape[1], cost_matrix.shape[2], max_samples)
+        if limit <= 0:
+            return cost_matrix, valid_mask
+        return cost_matrix[:, :limit, :limit], valid_mask[:, :limit]
+
+    def _resolve_set_weight(self, outputs=None, targets=None):
+        if not self.set_loss_enabled:
+            return 0.0
+
+        schedule_type = 'none'
+        if self.set_schedule_cfg:
+            schedule_type = str(self.set_schedule_cfg.get('type', 'none')).lower()
+        final_weight = self.set_loss_default_weight
+        if schedule_type == 'none':
+            return final_weight
+
+        t_tensor = None
+        for container in (outputs, targets):
+            if not isinstance(container, dict):
+                continue
+            candidate = container.get('t_frac')
+            if candidate is None and isinstance(container.get('matched'), dict):
+                candidate = container['matched'].get('t_frac')
+            if candidate is not None:
+                t_tensor = candidate
+                break
+
+        if t_tensor is None:
+            if not self._set_schedule_warned:
+                logging.warning("[SetLoss] Schedule enabled but no 't_frac' provided; using constant weight.")
+                self._set_schedule_warned = True
+            return final_weight
+
+        if not isinstance(t_tensor, torch.Tensor):
+            try:
+                t_tensor = torch.as_tensor(t_tensor, dtype=torch.float32)
+            except Exception:
+                if not self._set_schedule_warned:
+                    logging.warning("[SetLoss] Unable to parse 't_frac'; using constant weight.")
+                    self._set_schedule_warned = True
+                return final_weight
+
+        if t_tensor.numel() == 0:
+            return final_weight
+
+        t_value = t_tensor.detach().float().mean().clamp(0.0, 1.0).item()
+        start_weight = self._try_float(self.set_schedule_cfg.get('start_weight', 0.0)) if self.set_schedule_cfg else 0.0
+        if start_weight is None:
+            start_weight = 0.0
+        span = final_weight - start_weight
+
+        if schedule_type == 'linear':
+            factor = t_value
+        elif schedule_type in ('quadratic', 'quad'):
+            factor = t_value ** 2
+        elif schedule_type == 'cosine':
+            factor = 0.5 * (1 - math.cos(math.pi * t_value))
+        else:
+            factor = 1.0
+
+        return start_weight + span * factor
 
     def _calculate_standardized_validation_losses(self, outputs, targets):
         """
@@ -356,6 +638,9 @@ class GraspLossPose(nn.Module):
             contact_loss = self._calculate_contact_quality(outputs, targets)
             losses['contact_quality'] = contact_loss * quality_cfg.get('contact_weight', 0.5)
 
+        set_losses = self._calculate_set_losses(outputs, targets)
+        losses.update(set_losses)
+
         return losses
 
     def _normalize_by_num_grasps(self, loss_val, outputs, targets):
@@ -380,6 +665,66 @@ class GraspLossPose(nn.Module):
             return loss_val
         except Exception:
             return loss_val
+
+    def get_weighted_set_loss(self, loss_dict):
+        if not self.set_loss_enabled or not isinstance(loss_dict, dict):
+            return self._zero_like(loss_dict if isinstance(loss_dict, dict) else {})
+
+        total = None
+        for key, weight in self.set_loss_weights.items():
+            if weight is None or weight <= 0:
+                continue
+            component = loss_dict.get(f'set_{key}')
+            if component is None:
+                continue
+            term = component * weight
+            total = term if total is None else total + term
+
+        if total is None:
+            return self._zero_like(loss_dict)
+
+        weight_tensor = self._last_set_weight_tensor
+        if weight_tensor is None:
+            weight_tensor = total.new_tensor(self.set_loss_default_weight)
+        elif isinstance(weight_tensor, torch.Tensor) and weight_tensor.device != total.device:
+            weight_tensor = weight_tensor.to(total.device)
+
+        return total * weight_tensor
+
+    def aggregate_total_loss(self, loss_dict, base_weights=None):
+        if not isinstance(loss_dict, dict):
+            raise ValueError("loss_dict must be a dictionary")
+
+        if base_weights is None:
+            base_weights = self.loss_weights
+
+        total = None
+        for key, weight in (base_weights or {}).items():
+            if weight is None or weight <= 0:
+                continue
+            value = loss_dict.get(key)
+            if value is None:
+                continue
+            term = value * weight
+            total = term if total is None else total + term
+
+        set_total = self.get_weighted_set_loss(loss_dict)
+        if total is None:
+            return set_total
+
+        if isinstance(set_total, torch.Tensor) and set_total.device != total.device:
+            set_total = set_total.to(total.device)
+
+        return total + set_total
+
+    def compute_set_metrics(self, pred_dict, batch):
+        if not self.set_metrics_enabled or self.set_metrics_evaluator is None:
+            return {}
+        try:
+            return self.set_metrics_evaluator.compute(pred_dict, batch)
+        except Exception as exc:
+            logging.error(f"[SetMetrics] Failed to compute metrics: {exc}")
+            return {}
 
     def _calculate_penetration_penalty(self, outputs, targets):
         """Calculate penetration penalty for quality assessment."""
