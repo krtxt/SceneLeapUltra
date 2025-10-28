@@ -36,6 +36,13 @@ use_rgb: ${use_rgb}
 mmdit:
   enable: false
   text_as_sequence: false
+  post_branch_scaling:
+    enable: false
+  qk_rmsnorm:
+    enable: false
+  softclamp:
+    enable: false
+    value: 50.0
   qkv_modulation:
     enable: false
     sources: ["time"]

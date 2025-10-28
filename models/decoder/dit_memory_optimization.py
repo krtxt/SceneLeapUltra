@@ -170,6 +170,13 @@ class EfficientAttention(nn.Module):
         # Only used for non-SDPA paths (SDPA has built-in dropout support)
         self.attn_dropout = nn.Dropout(attention_dropout) if attention_dropout > 0.0 else None
         
+        # Optional stabilization features (configured externally)
+        self.enable_qk_rmsnorm: bool = False
+        self.enable_softclamp: bool = False
+        self.softclamp_value: float = 50.0
+        self.rmsnorm_eps: float = 1e-6
+        self._softclamp_warning_emitted: bool = False
+        
         # Try to import flash attention if explicitly requested (fallback option)
         self.flash_attn_func = None
         if use_flash_attention and not self.use_sdpa:
@@ -219,6 +226,9 @@ class EfficientAttention(nn.Module):
         
         # Priority 1: Use PyTorch 2.x SDPA (recommended)
         if self.use_sdpa:
+            if self.enable_softclamp and not self._softclamp_warning_emitted:
+                logging.warning("softclamp is not applied under SDPA backend")
+                self._softclamp_warning_emitted = True
             return self._sdpa_attention_forward(query, key, value, mask, **modulation)
         
         # Priority 2: Use flash attention if available and sequences are long enough
@@ -249,6 +259,10 @@ class EfficientAttention(nn.Module):
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
+        
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
         
         q = self._apply_modulation(q, q_scale, q_shift, "q")
         k = self._apply_modulation(k, k_scale, k_shift, "k")
@@ -310,6 +324,10 @@ class EfficientAttention(nn.Module):
         k = self.to_k(key)
         v = self.to_v(value)
         
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
         q = self._apply_modulation(q, q_scale, q_shift, "q")
         k = self._apply_modulation(k, k_scale, k_shift, "k")
         v = self._apply_modulation(v, v_scale, v_shift, "v")
@@ -342,6 +360,10 @@ class EfficientAttention(nn.Module):
         k = self.to_k(key)
         v = self.to_v(value)
         
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
         q = self._apply_modulation(q, q_scale, q_shift, "q")
         k = self._apply_modulation(k, k_scale, k_shift, "k")
         v = self._apply_modulation(v, v_scale, v_shift, "v")
@@ -360,6 +382,10 @@ class EfficientAttention(nn.Module):
             
             # Compute attention scores for this chunk
             scores = torch.einsum('bhid,bhjd->bhij', q_chunk, k) * self.scale
+            
+            if self.enable_softclamp:
+                clamp_val = float(max(self.softclamp_value, 1e-6))
+                scores = torch.tanh(scores / clamp_val) * clamp_val
             
             if mask is not None:
                 # Handle different mask shapes
@@ -404,6 +430,10 @@ class EfficientAttention(nn.Module):
         k = self.to_k(key)
         v = self.to_v(value)
         
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
         q = self._apply_modulation(q, q_scale, q_shift, "q")
         k = self._apply_modulation(k, k_scale, k_shift, "k")
         v = self._apply_modulation(v, v_scale, v_shift, "v")
@@ -415,6 +445,10 @@ class EfficientAttention(nn.Module):
         
         # Compute attention scores
         scores = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
+        
+        if self.enable_softclamp:
+            clamp_val = float(max(self.softclamp_value, 1e-6))
+            scores = torch.tanh(scores / clamp_val) * clamp_val
         
         if mask is not None:
             # Handle different mask shapes
@@ -439,6 +473,12 @@ class EfficientAttention(nn.Module):
         
         return self.to_out(out)
     
+    def _apply_rmsnorm(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor is None:
+            return tensor
+        rms = tensor.pow(2).mean(dim=-1, keepdim=True)
+        return tensor * torch.rsqrt(rms + self.rmsnorm_eps)
+
     def _prepare_modulation(self, modulation: torch.Tensor, reference: torch.Tensor, label: str) -> torch.Tensor:
         target_shape = reference.shape
         if modulation.dim() == 1:

@@ -326,6 +326,9 @@ class DiTBlock(nn.Module):
 
         self.attn_topology = (attn_topology or "pixart").lower()
         mmdit_cfg = mmdit_config or {}
+        if not isinstance(mmdit_cfg, dict):
+            mmdit_cfg = dict(mmdit_cfg)
+
         self.mmdit_enabled = bool(mmdit_cfg.get("enable", False)) or self.attn_topology == "mmdit"
         if self.mmdit_enabled and self.attn_topology != "mmdit":
             self.attn_topology = "mmdit"
@@ -334,10 +337,36 @@ class DiTBlock(nn.Module):
         qkv_cfg = mmdit_cfg.get("qkv_modulation", {}) or {}
         self.mmdit_enable_qkv_modulation = bool(qkv_cfg.get("enable", False))
         raw_sources = qkv_cfg.get("sources", ["time"])
+        if isinstance(raw_sources, str):
+            raw_sources = [raw_sources]
         self.mmdit_qkv_sources: List[str] = [str(src).lower() for src in raw_sources if src]
         self.mmdit_qkv_hidden = int(qkv_cfg.get("hidden", d_model))
         self.mmdit_modulators = nn.ModuleDict()
         self.mmdit_active_sources: List[str] = []
+
+        pbs_cfg = mmdit_cfg.get("post_branch_scaling", {}) or {}
+        self.mmdit_post_branch_scaling = bool(pbs_cfg.get("enable", False))
+        self.mmdit_post_hidden = int(pbs_cfg.get("hidden", self.mmdit_qkv_hidden))
+        raw_post_sources = pbs_cfg.get("sources", self.mmdit_qkv_sources if self.mmdit_qkv_sources else ["time"])
+        if isinstance(raw_post_sources, str):
+            raw_post_sources = [raw_post_sources]
+        self.mmdit_post_scaling_sources: List[str] = [str(src).lower() for src in raw_post_sources if src]
+        self.mmdit_post_scalers = nn.ModuleDict()
+        self.mmdit_post_sources: List[str] = []
+        self.mmdit_post_param_chunks: int = 7  # grasp_scale, scene_scale, text_scale, grasp_shift, scene_shift, text_shift, post_scale
+
+        qk_rms_cfg = mmdit_cfg.get("qk_rmsnorm", {}) or {}
+        self.mmdit_qk_rmsnorm_enabled = bool(qk_rms_cfg.get("enable", False))
+
+        soft_cfg = mmdit_cfg.get("softclamp", {}) or {}
+        self.mmdit_softclamp_enabled = bool(soft_cfg.get("enable", False))
+        self.mmdit_softclamp_value = float(soft_cfg.get("value", 50.0)) if soft_cfg.get("value") is not None else 50.0
+        if self.mmdit_softclamp_value <= 0:
+            self.mmdit_softclamp_value = 50.0
+
+        if self.mmdit_post_branch_scaling and self.attn_topology != "mmdit":
+            self.logger.warning("Post-branch scaling is only available for MM-DiT topology. Disabling for this block.")
+            self.mmdit_post_branch_scaling = False
 
         if self.mmdit_enable_qkv_modulation:
             for source in self.mmdit_qkv_sources:
@@ -367,15 +396,49 @@ class DiTBlock(nn.Module):
                 self.logger.warning("No valid QKV modulation sources configured; disabling modulation for this block.")
                 self.mmdit_enable_qkv_modulation = False
 
+        if self.mmdit_post_branch_scaling:
+            for source in self.mmdit_post_scaling_sources:
+                if source == "time":
+                    if time_embed_dim is None:
+                        self.logger.warning(
+                            "Post-branch scaling source 'time' requested but time_embed_dim is None; skipping time modulation."
+                        )
+                        continue
+                    input_dim = time_embed_dim
+                elif source in {"scene", "text"}:
+                    input_dim = d_model
+                else:
+                    self.logger.warning(
+                        f"Unsupported post-branch scaling source '{source}'. Available sources: 'time', 'scene', 'text'."
+                    )
+                    continue
+
+                self.mmdit_post_scalers[source] = nn.Sequential(
+                    nn.Linear(input_dim, self.mmdit_post_hidden),
+                    nn.SiLU(),
+                    nn.Linear(self.mmdit_post_hidden, self.d_model * self.mmdit_post_param_chunks)
+                )
+                self.mmdit_post_sources.append(source)
+
+            if not self.mmdit_post_sources:
+                self.logger.warning("No valid post-branch scaling sources configured; disabling for this block.")
+                self.mmdit_post_branch_scaling = False
+
         if self.mmdit_enabled:
             self.logger.info(
-                "DiTBlock initialized in MM-DiT mode | text_as_sequence=%s | qkv_modulation=%s | sources=%s",
+                "DiTBlock initialized in MM-DiT mode | text_as_sequence=%s | qkv_modulation=%s | post_branch_scaling=%s | qk_rmsnorm=%s | softclamp=%s | sources=%s | post_sources=%s",
                 self.mmdit_text_as_sequence,
                 self.mmdit_enable_qkv_modulation,
-                self.mmdit_active_sources if self.mmdit_enable_qkv_modulation else []
+                self.mmdit_post_branch_scaling,
+                self.mmdit_qk_rmsnorm_enabled,
+                self.mmdit_softclamp_enabled,
+                self.mmdit_active_sources if self.mmdit_enable_qkv_modulation else [],
+                self.mmdit_post_sources if self.mmdit_post_branch_scaling else []
             )
         else:
             self.logger.debug("DiTBlock initialized in PixArt topology")
+
+        self._mmdit_info_logged = False
         
         # Memory-efficient attention layers with dropout support
         self.self_attention = EfficientAttention(
@@ -390,6 +453,12 @@ class DiTBlock(nn.Module):
             d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
             attention_dropout=cross_attention_dropout
         )
+
+        for attn_layer in (self.self_attention, self.scene_cross_attention, self.text_cross_attention):
+            attn_layer.enable_qk_rmsnorm = self.mmdit_qk_rmsnorm_enabled
+            attn_layer.enable_softclamp = self.mmdit_softclamp_enabled
+            attn_layer.softclamp_value = self.mmdit_softclamp_value
+            attn_layer._softclamp_warning_emitted = False
         
         # Feed-forward network
         self.feed_forward = FeedForward(d_model, dropout=dropout)
@@ -542,10 +611,58 @@ class DiTBlock(nn.Module):
         fused = self._fuse_modalities(norm_x, scene_context, text_context, scene_mask, text_mask)
         tokens_all = fused["tokens"]
         attn_mask = fused["attn_mask"]
+        lengths = fused["lengths"]
 
         if torch.isnan(tokens_all).any():
             self.logger.error("[DiTBlock NaN] NaN after modality fusion (MM-DiT)")
             raise RuntimeError("NaN detected in DiTBlock (MM-DiT) after fusion")
+
+        if not self._mmdit_info_logged:
+            self.logger.info(
+                "[DiTBlock MM-DiT] segments grasp=%d scene=%d text=%d | post_branch_scaling=%s | qk_rmsnorm=%s | softclamp=%s",
+                lengths.get("grasp", 0),
+                lengths.get("scene", 0),
+                lengths.get("text", 0),
+                self.mmdit_post_branch_scaling,
+                self.mmdit_qk_rmsnorm_enabled,
+                self.mmdit_softclamp_enabled,
+            )
+            self._mmdit_info_logged = True
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            token_norm = tokens_all.detach().norm(dim=-1).mean().item() if tokens_all.numel() > 0 else 0.0
+            mask_sum = attn_mask.sum().item() if attn_mask is not None else lengths.get("total", 0)
+            self.logger.debug(
+                "[DiTBlock MM-DiT] tokens_all shape=%s attn_mask_shape=%s token_norm=%.6f mask_sum=%.2f",
+                tuple(tokens_all.shape),
+                tuple(attn_mask.shape) if attn_mask is not None else None,
+                token_norm,
+                mask_sum,
+            )
+
+        pbs_params: Optional[Dict[str, torch.Tensor]] = None
+        if self.mmdit_post_branch_scaling:
+            pbs_params = self._compute_post_branch_scaling(
+                time_emb=time_emb,
+                scene_tokens=fused["scene_tokens"],
+                text_tokens=fused["text_tokens"],
+                scene_mask=fused["scene_mask"],
+                text_mask=fused["text_mask"],
+            )
+            if pbs_params is not None:
+                tokens_all = self._apply_pre_branch_affine(
+                    tokens_all,
+                    lengths,
+                    pbs_params,
+                    fused["scene_mask"],
+                    fused["text_mask"],
+                    fused["combined_mask"],
+                )
+                if torch.isnan(tokens_all).any():
+                    self.logger.error("[DiTBlock NaN] NaN after post-branch scaling (MM-DiT)")
+                    raise RuntimeError("NaN detected in DiTBlock (MM-DiT) post-branch scaling")
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug("[DiTBlock MM-DiT] Applied pre-attention affine scaling")
 
         attn_kwargs = self._compute_qkv_mod(
             time_emb=time_emb,
@@ -554,6 +671,10 @@ class DiTBlock(nn.Module):
             scene_mask=fused["scene_mask"],
             text_mask=fused["text_mask"],
         )
+
+        if attn_kwargs and self.logger.isEnabledFor(logging.DEBUG):
+            stats = {k: v.detach().mean().item() for k, v in attn_kwargs.items()}
+            self.logger.debug("[DiTBlock MM-DiT] QKV modulation means %s", stats)
 
         attn_out_all = self.self_attention(
             tokens_all,
@@ -565,9 +686,20 @@ class DiTBlock(nn.Module):
             self.logger.error("[DiTBlock NaN] NaN after unified attention (MM-DiT)")
             raise RuntimeError("NaN detected in DiTBlock (MM-DiT) attention")
 
-        grasp_len = fused["lengths"]["grasp"]
-        attn_out = attn_out_all[:, :grasp_len, :]
-        x = x + attn_out
+        grasp_len = lengths.get("grasp", 0)
+        if grasp_len > 0:
+            attn_out = attn_out_all[:, :grasp_len, :]
+            x = x + attn_out
+        else:
+            self.logger.warning("MM-DiT received zero grasp tokens; skipping residual update")
+
+        if pbs_params is not None and grasp_len > 0:
+            x = x * (1 + pbs_params["post_scale"].unsqueeze(1))
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    "[DiTBlock MM-DiT] Post-residual scaling mean=%.6f",
+                    pbs_params["post_scale"].detach().mean().item(),
+                )
 
         if self.use_adaptive_norm and time_emb is not None:
             norm_x = self.norm4(x, time_emb)
@@ -781,6 +913,18 @@ class DiTBlock(nn.Module):
             return {}
 
         modulation = torch.stack(contributions, dim=0).sum(dim=0)
+        if torch.isnan(modulation).any() or torch.isinf(modulation).any():
+            raise DiTConditioningError("Non-finite values encountered in QKV modulation")
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            mod_detached = modulation.detach()
+            self.logger.debug(
+                "[DiTBlock MM-DiT] QKV modulation stats | mean=%.6f std=%.6f max=%.6f",
+                mod_detached.mean().item(),
+                mod_detached.std(unbiased=False).item() if mod_detached.numel() > 1 else 0.0,
+                mod_detached.abs().max().item(),
+            )
+
         q_scale, q_shift, k_scale, k_shift, v_scale, v_shift = modulation.chunk(6, dim=-1)
         return {
             "q_scale": q_scale,
@@ -790,6 +934,112 @@ class DiTBlock(nn.Module):
             "v_scale": v_scale,
             "v_shift": v_shift,
         }
+
+    def _compute_post_branch_scaling(
+        self,
+        time_emb: Optional[torch.Tensor],
+        scene_tokens: Optional[torch.Tensor],
+        text_tokens: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        if not self.mmdit_post_branch_scaling or not self.mmdit_post_sources:
+            return None
+
+        contributions = []
+        for source in self.mmdit_post_sources:
+            if source == "time":
+                if time_emb is None:
+                    continue
+                mod_in = time_emb
+            elif source == "scene":
+                mod_in = self._masked_mean(scene_tokens, scene_mask)
+                if mod_in is None:
+                    continue
+            elif source == "text":
+                mod_in = self._masked_mean(text_tokens, text_mask)
+                if mod_in is None:
+                    continue
+            else:
+                continue
+
+            contributions.append(self.mmdit_post_scalers[source](mod_in))
+
+        if not contributions:
+            return None
+
+        params = torch.stack(contributions, dim=0).sum(dim=0)
+        if torch.isnan(params).any() or torch.isinf(params).any():
+            raise DiTConditioningError("Non-finite values encountered in post-branch scaling modulation")
+
+        params = params.view(params.shape[0], self.mmdit_post_param_chunks, self.d_model)
+        params = torch.tanh(params)
+
+        grasp_scale, scene_scale, text_scale, grasp_shift, scene_shift, text_shift, post_scale = params.unbind(dim=1)
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(
+                "[DiTBlock MM-DiT] Post-branch modulation stats | grasp_scale_mean=%.6f grasp_shift_mean=%.6f",
+                grasp_scale.detach().mean().item(),
+                grasp_shift.detach().mean().item(),
+            )
+
+        return {
+            "grasp_scale": grasp_scale,
+            "scene_scale": scene_scale,
+            "text_scale": text_scale,
+            "grasp_shift": grasp_shift,
+            "scene_shift": scene_shift,
+            "text_shift": text_shift,
+            "post_scale": post_scale,
+        }
+
+    def _apply_pre_branch_affine(
+        self,
+        tokens_all: torch.Tensor,
+        lengths: Dict[str, int],
+        params: Dict[str, torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+        combined_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        grasp_len = lengths.get("grasp", 0)
+        scene_len = lengths.get("scene", 0)
+        text_len = lengths.get("text", 0)
+
+        if grasp_len > 0:
+            tokens_all[:, :grasp_len, :] = (
+                tokens_all[:, :grasp_len, :] * (1 + params["grasp_scale"].unsqueeze(1))
+                + params["grasp_shift"].unsqueeze(1)
+            )
+
+        if scene_len > 0:
+            scene_start = grasp_len
+            scene_slice = slice(scene_start, scene_start + scene_len)
+            tokens_scene = (
+                tokens_all[:, scene_slice, :] * (1 + params["scene_scale"].unsqueeze(1))
+                + params["scene_shift"].unsqueeze(1)
+            )
+            if scene_mask is not None:
+                tokens_scene = tokens_scene * scene_mask.unsqueeze(-1)
+            tokens_all[:, scene_slice, :] = tokens_scene
+
+        if text_len > 0:
+            text_start = grasp_len + scene_len
+            text_slice = slice(text_start, text_start + text_len)
+            tokens_text = (
+                tokens_all[:, text_slice, :] * (1 + params["text_scale"].unsqueeze(1))
+                + params["text_shift"].unsqueeze(1)
+            )
+            if text_mask is not None:
+                tokens_text = tokens_text * text_mask.unsqueeze(-1)
+            tokens_all[:, text_slice, :] = tokens_text
+
+        if combined_mask is not None:
+            tokens_all = tokens_all * combined_mask.unsqueeze(-1)
+
+        return tokens_all
+
 
 class OutputProjection(nn.Module):
     """
