@@ -13,6 +13,7 @@ import math
 import logging
 from typing import Dict, Optional, Any, Tuple
 from einops import rearrange
+from omegaconf import OmegaConf, DictConfig
 
 # Reuse components from existing DiT
 from .dit import (
@@ -143,6 +144,17 @@ class DiTFM(nn.Module):
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+        self.mmdit_config = getattr(cfg, 'mmdit', {})
+        if isinstance(self.mmdit_config, DictConfig):
+            self.mmdit_config = OmegaConf.to_container(self.mmdit_config, resolve=True)
+        elif not isinstance(self.mmdit_config, dict):
+            self.mmdit_config = dict(self.mmdit_config)
+        mmdit_enabled = bool(self.mmdit_config.get('enable', False))
+        self.attn_topology = getattr(cfg, 'attn_topology', None)
+        if self.attn_topology is None:
+            self.attn_topology = 'mmdit' if mmdit_enabled else 'pixart'
+        self.logger.info(f"DiTFM attention topology: {self.attn_topology}")
+        
         # Attention optimization config (pass-through to DiT blocks)
         self.use_flash_attention = getattr(cfg, 'use_flash_attention', False)
         self.attention_chunk_size = getattr(cfg, 'attention_chunk_size', 512)
@@ -192,6 +204,8 @@ class DiTFM(nn.Module):
                 use_flash_attention=self.use_flash_attention,
                 attention_dropout=self.attention_dropout,
                 cross_attention_dropout=self.cross_attention_dropout,
+                attn_topology=self.attn_topology,
+                mmdit_config=self.mmdit_config,
             )
             for _ in range(self.num_layers)
         ])
@@ -291,25 +305,62 @@ class DiTFM(nn.Module):
             time_emb = None
         
         # Get conditioning features
-        scene_context = data.get('scene_cond')  # [B, N, d_model]
-        text_context = data.get('text_cond')  # [B, d_model] or None
-        scene_mask = data.get('scene_mask', None)  # [B, N] - mask for scene padding
-        
-        if text_context is not None and text_context.dim() == 2:
-            text_context = text_context.unsqueeze(1)  # [B, 1, d_model]
-        
-        # Ensure scene_mask is on the correct device
+        model_device = self._get_device()
+        scene_context = data.get('scene_cond')
+        if scene_context is not None:
+            if not isinstance(scene_context, torch.Tensor):
+                self.logger.warning(f"scene_cond is not a tensor ({type(scene_context)}), disabling scene conditioning")
+                scene_context = None
+            elif scene_context.device != model_device:
+                scene_context = scene_context.to(model_device)
+
+        text_context = None
+        if self.use_text_condition:
+            raw_text_context = data.get('text_cond')
+            if raw_text_context is not None:
+                if not isinstance(raw_text_context, torch.Tensor):
+                    self.logger.warning(
+                        f"text_cond is not a tensor ({type(raw_text_context)}), disabling text conditioning"
+                    )
+                else:
+                    if raw_text_context.device != model_device:
+                        raw_text_context = raw_text_context.to(model_device)
+                    if raw_text_context.dim() == 2:
+                        text_context = raw_text_context.unsqueeze(1)
+                    else:
+                        text_context = raw_text_context
+
+        scene_mask = data.get('scene_mask', None)
         if scene_mask is not None:
             if not isinstance(scene_mask, torch.Tensor):
                 self.logger.warning(f"scene_mask is not a tensor ({type(scene_mask)}), ignoring")
                 scene_mask = None
-            elif scene_mask.device != self._get_device():
-                scene_mask = scene_mask.to(self._get_device())
-        
+            elif scene_mask.device != model_device:
+                scene_mask = scene_mask.to(model_device)
+
+        text_mask = data.get('text_mask', None)
+        if text_mask is not None:
+            if not isinstance(text_mask, torch.Tensor):
+                self.logger.warning(f"text_mask is not a tensor ({type(text_mask)}), ignoring text mask")
+                text_mask = None
+            else:
+                if text_mask.device != model_device:
+                    text_mask = text_mask.to(model_device)
+                if text_mask.dim() == 1:
+                    text_mask = text_mask.unsqueeze(1)
+                text_mask = text_mask.to(dtype=torch.float32)
+
         # Apply DiT blocks
         x = grasp_tokens
         for i, block in enumerate(self.dit_blocks):
-            x = block(x, time_emb, scene_context, text_context, scene_mask=scene_mask)
+            x = block(
+                x,
+                time_emb,
+                scene_context,
+                text_context,
+                scene_mask=scene_mask,
+                text_mask=text_mask,
+            )
             
             if self.debug_check_nan and torch.isnan(x).any():
                 self.logger.error(f"NaN detected after DiT block {i}")

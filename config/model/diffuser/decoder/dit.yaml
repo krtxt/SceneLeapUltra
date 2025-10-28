@@ -24,6 +24,14 @@ use_negative_prompts: ${use_negative_prompts}
 use_object_mask: ${use_object_mask}
 use_rgb: ${use_rgb}
 
+mmdit:
+  enable: false
+  text_as_sequence: false
+  qkv_modulation:
+    enable: false
+    sources: ["time"]
+    hidden: 512
+
 attention_dropout: 0.1
 cross_attention_dropout: 0.1
 

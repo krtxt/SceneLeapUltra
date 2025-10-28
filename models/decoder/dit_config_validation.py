@@ -181,6 +181,8 @@ def get_dit_config_summary(cfg: DictConfig) -> Dict[str, Any]:
             'use_rgb': cfg.use_rgb,
             'text_dropout_prob': cfg.text_dropout_prob
         },
+        'attention_topology': getattr(cfg, 'attn_topology', 'pixart'),
+        'mmdit_enabled': bool(getattr(getattr(cfg, 'mmdit', {}), 'enable', False)),
         'optimization': {
             'dropout': cfg.dropout,
             'attention_dropout': cfg.attention_dropout,
