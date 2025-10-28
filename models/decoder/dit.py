@@ -21,7 +21,7 @@ from .dit_validation import (
     DiTDeviceError, DiTConditioningError, DiTGracefulFallback
 )
 from .dit_memory_optimization import (
-    MemoryMonitor, EfficientAttention, GradientCheckpointedDiTBlock,
+    MemoryMonitor, EfficientAttention, JointAttention, GradientCheckpointedDiTBlock,
     BatchProcessor, optimize_memory_usage, get_memory_optimization_config
 )
 
@@ -310,32 +310,72 @@ class DiTBlock(nn.Module):
     """
     DiT transformer block with self-attention, cross-attention, and feed-forward layers.
     Enhanced with memory optimization features and mask support.
+    Supports optional MMDiT-style joint attention for multi-modal conditioning.
     """
     def __init__(self, d_model: int, num_heads: int, d_head: int, dropout: float = 0.1,
                  use_adaptive_norm: bool = True, time_embed_dim: Optional[int] = None,
                  chunk_size: int = 512, use_flash_attention: bool = False,
-                 attention_dropout: float = 0.0, cross_attention_dropout: float = 0.0):
+                 attention_dropout: float = 0.0, cross_attention_dropout: float = 0.0,
+                 mmdit_cfg: Optional[Dict] = None):
         super().__init__()
         self.d_model = d_model
         self.use_adaptive_norm = use_adaptive_norm
-        
+        self.logger = logging.getLogger(__name__)
+
+        if mmdit_cfg is not None and hasattr(mmdit_cfg, "items"):
+            mmdit_cfg = {k: mmdit_cfg[k] for k in mmdit_cfg}
+        elif mmdit_cfg is None:
+            mmdit_cfg = {}
+        self.mmdit_cfg = mmdit_cfg
+        self.mmdit_enabled = bool(self.mmdit_cfg.get('enabled', False))
+        self.mmdit_modality_adaln = bool(self.mmdit_cfg.get('modality_specific_adaln', False))
+        if self.mmdit_enabled:
+            self.logger.info("[DiTBlock] MMDiT mode enabled with config: %s", self.mmdit_cfg)
+            if self.mmdit_modality_adaln:
+                self.logger.info("[DiTBlock] MMDiT modality-specific AdaLN active")
+
         # Memory-efficient attention layers with dropout support
         self.self_attention = EfficientAttention(
             d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
             attention_dropout=attention_dropout
         )
-        self.scene_cross_attention = EfficientAttention(
-            d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
-            attention_dropout=cross_attention_dropout
-        )
-        self.text_cross_attention = EfficientAttention(
-            d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
-            attention_dropout=cross_attention_dropout
-        )
-        
+
+        if self.mmdit_enabled:
+            # Use JointAttention for combined scene+text conditioning
+            self.joint_attention = JointAttention(
+                d_model=d_model,
+                num_heads=num_heads,
+                d_head=d_head,
+                dropout=dropout,
+                chunk_size=chunk_size,
+                use_flash_attention=use_flash_attention,
+                attention_dropout=cross_attention_dropout,
+                separate_modality_projections=self.mmdit_cfg.get('separate_modality_projections', True),
+                qkv_bias=self.mmdit_cfg.get('qkv_bias', False),
+                qk_norm=self.mmdit_cfg.get('qk_norm', False),
+                logger=self.logger,
+            )
+            self.scene_cross_attention = None
+            self.text_cross_attention = None
+            self.logger.info("[DiTBlock] Initialized JointAttention with separate_proj=%s qkv_bias=%s qk_norm=%s",
+                             self.mmdit_cfg.get('separate_modality_projections', True),
+                             self.mmdit_cfg.get('qkv_bias', False),
+                             self.mmdit_cfg.get('qk_norm', False))
+        else:
+            # Legacy: separate scene and text cross-attention
+            self.scene_cross_attention = EfficientAttention(
+                d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
+                attention_dropout=cross_attention_dropout
+            )
+            self.text_cross_attention = EfficientAttention(
+                d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
+                attention_dropout=cross_attention_dropout
+            )
+            self.joint_attention = None
+
         # Feed-forward network
         self.feed_forward = FeedForward(d_model, dropout=dropout)
-        
+
         # Normalization layers
         if use_adaptive_norm and time_embed_dim is not None:
             self.norm1 = AdaptiveLayerNorm(d_model, time_embed_dim)
@@ -383,46 +423,95 @@ class DiTBlock(nn.Module):
 
         x = x + attn_out
 
-        # Cross-attention with scene features
-        if scene_context is not None:
+        # Conditional attention: MMDiT joint attention vs. legacy separate cross-attentions
+        if self.mmdit_enabled:
+            # MMDiT path: single joint attention over grasp+scene+text
             if self.use_adaptive_norm and time_emb is not None:
                 norm_x = self.norm2(x, time_emb)
             else:
                 norm_x = self.norm2(x)
 
             if torch.isnan(norm_x).any():
-                logging.error(f"[DiTBlock NaN] NaN after norm2")
-                raise RuntimeError("NaN detected in DiTBlock after norm2")
+                logging.error(f"[DiTBlock MMDiT NaN] NaN after norm2 (pre-joint-attn)")
+                raise RuntimeError("NaN detected in DiTBlock MMDiT pre-joint-attn")
 
-            # Pass scene_mask to prevent attention to padding positions
-            scene_attn_out = self.scene_cross_attention(norm_x, scene_context, scene_context, mask=scene_mask)
-            if torch.isnan(scene_attn_out).any():
-                logging.error(f"[DiTBlock NaN] NaN after scene_cross_attention")
+            # Prepare text context shape: ensure (B, T, d_model)
+            text_tokens = None
+            if text_context is not None:
+                if text_context.dim() == 2:
+                    text_tokens = text_context.unsqueeze(1)
+                else:
+                    text_tokens = text_context
+
+            joint_out = self.joint_attention(
+                grasp_tokens=norm_x,
+                scene_tokens=scene_context,
+                text_tokens=text_tokens,
+                scene_mask=scene_mask
+            )
+
+            if torch.isnan(joint_out).any():
+                logging.error(f"[DiTBlock MMDiT NaN] NaN after joint_attention")
                 logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
-                logging.error(f"  scene_context stats: min={scene_context.min():.6f}, max={scene_context.max():.6f}")
-                raise RuntimeError("NaN detected in DiTBlock scene_cross_attention")
+                if scene_context is not None:
+                    logging.error(f"  scene_context stats: min={scene_context.min():.6f}, max={scene_context.max():.6f}")
+                if text_tokens is not None:
+                    logging.error(f"  text_context stats: min={text_tokens.min():.6f}, max={text_tokens.max():.6f}")
+                raise RuntimeError("NaN detected in DiTBlock MMDiT joint_attention")
 
-            x = x + scene_attn_out
+            x = x + joint_out
 
-        # Cross-attention with text features (if available)
-        if text_context is not None:
-            if self.use_adaptive_norm and time_emb is not None:
-                norm_x = self.norm3(x, time_emb)
-            else:
-                norm_x = self.norm3(x)
+            if self.mmdit_modality_adaln:
+                if self.use_adaptive_norm and time_emb is not None:
+                    mod_x = self.norm3(x, time_emb)
+                else:
+                    mod_x = self.norm3(x)
+                if torch.isnan(mod_x).any():
+                    logging.error(f"[DiTBlock MMDiT NaN] NaN after modality-specific AdaLN")
+                    raise RuntimeError("NaN detected in DiTBlock MMDiT modality-specific AdaLN")
+                x = mod_x
 
-            if torch.isnan(norm_x).any():
-                logging.error(f"[DiTBlock NaN] NaN after norm3")
-                raise RuntimeError("NaN detected in DiTBlock after norm3")
+        else:
+            # Legacy path: separate scene and text cross-attention
+            if scene_context is not None:
+                if self.use_adaptive_norm and time_emb is not None:
+                    norm_x = self.norm2(x, time_emb)
+                else:
+                    norm_x = self.norm2(x)
 
-            text_attn_out = self.text_cross_attention(norm_x, text_context, text_context)
-            if torch.isnan(text_attn_out).any():
-                logging.error(f"[DiTBlock NaN] NaN after text_cross_attention")
-                logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
-                logging.error(f"  text_context stats: min={text_context.min():.6f}, max={text_context.max():.6f}")
-                raise RuntimeError("NaN detected in DiTBlock text_cross_attention")
+                if torch.isnan(norm_x).any():
+                    logging.error(f"[DiTBlock NaN] NaN after norm2")
+                    raise RuntimeError("NaN detected in DiTBlock after norm2")
 
-            x = x + text_attn_out
+                # Pass scene_mask to prevent attention to padding positions
+                scene_attn_out = self.scene_cross_attention(norm_x, scene_context, scene_context, mask=scene_mask)
+                if torch.isnan(scene_attn_out).any():
+                    logging.error(f"[DiTBlock NaN] NaN after scene_cross_attention")
+                    logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+                    logging.error(f"  scene_context stats: min={scene_context.min():.6f}, max={scene_context.max():.6f}")
+                    raise RuntimeError("NaN detected in DiTBlock scene_cross_attention")
+
+                x = x + scene_attn_out
+
+            # Cross-attention with text features (if available)
+            if text_context is not None:
+                if self.use_adaptive_norm and time_emb is not None:
+                    norm_x = self.norm3(x, time_emb)
+                else:
+                    norm_x = self.norm3(x)
+
+                if torch.isnan(norm_x).any():
+                    logging.error(f"[DiTBlock NaN] NaN after norm3")
+                    raise RuntimeError("NaN detected in DiTBlock after norm3")
+
+                text_attn_out = self.text_cross_attention(norm_x, text_context, text_context)
+                if torch.isnan(text_attn_out).any():
+                    logging.error(f"[DiTBlock NaN] NaN after text_cross_attention")
+                    logging.error(f"  norm_x stats: min={norm_x.min():.6f}, max={norm_x.max():.6f}")
+                    logging.error(f"  text_context stats: min={text_context.min():.6f}, max={text_context.max():.6f}")
+                    raise RuntimeError("NaN detected in DiTBlock text_cross_attention")
+
+                x = x + text_attn_out
 
         # Feed-forward network
         if self.use_adaptive_norm and time_emb is not None:
@@ -547,6 +636,20 @@ class DiTModel(nn.Module):
         self.logger.info(f"Memory optimizations: checkpointing={self.gradient_checkpointing}, "
                         f"flash_attention={self.use_flash_attention}, chunk_size={self.attention_chunk_size}")
         
+        # MMDiT configuration (optional)
+        raw_mmdit_cfg = getattr(cfg, 'mmdit', None)
+        if raw_mmdit_cfg is not None and hasattr(raw_mmdit_cfg, 'items'):
+            self.mmdit_cfg = {k: raw_mmdit_cfg[k] for k in raw_mmdit_cfg}
+        elif raw_mmdit_cfg is None:
+            self.mmdit_cfg = {}
+        else:
+            self.mmdit_cfg = dict(raw_mmdit_cfg)
+        self.mmdit_enabled = bool(self.mmdit_cfg.get('enabled', False))
+        if self.mmdit_enabled:
+            self.logger.info("MMDiT joint attention enabled with config: %s", self.mmdit_cfg)
+        else:
+            self.logger.info("MMDiT joint attention disabled; using legacy cross-attention path")
+        
         # Core DiT components
         self.grasp_tokenizer = GraspTokenizer(self.d_x, self.d_model)
         
@@ -570,7 +673,8 @@ class DiTModel(nn.Module):
                 chunk_size=self.attention_chunk_size,
                 use_flash_attention=self.use_flash_attention,
                 attention_dropout=self.attention_dropout,
-                cross_attention_dropout=self.cross_attention_dropout
+                cross_attention_dropout=self.cross_attention_dropout,
+                mmdit_cfg=self.mmdit_cfg.copy()
             )
             
             # Wrap with gradient checkpointing if enabled

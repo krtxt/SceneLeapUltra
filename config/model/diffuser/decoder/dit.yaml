@@ -27,6 +27,13 @@ use_rgb: ${use_rgb}
 attention_dropout: 0.1
 cross_attention_dropout: 0.1
 
+mmdit:
+  enabled: false
+  separate_modality_projections: true
+  qkv_bias: false
+  qk_norm: false
+  modality_specific_adaln: false
+
 ff_mult: 4
 ff_dropout: 0.1
 

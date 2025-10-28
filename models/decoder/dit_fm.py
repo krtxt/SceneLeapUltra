@@ -151,6 +151,20 @@ class DiTFM(nn.Module):
         self.attention_dropout = getattr(cfg, 'attention_dropout', 0.0)
         self.cross_attention_dropout = getattr(cfg, 'cross_attention_dropout', 0.0)
 
+        # MMDiT configuration (optional)
+        raw_mmdit_cfg = getattr(cfg, 'mmdit', None)
+        if raw_mmdit_cfg is not None and hasattr(raw_mmdit_cfg, 'items'):
+            self.mmdit_cfg = {k: raw_mmdit_cfg[k] for k in raw_mmdit_cfg}
+        elif raw_mmdit_cfg is None:
+            self.mmdit_cfg = {}
+        else:
+            self.mmdit_cfg = dict(raw_mmdit_cfg)
+        self.mmdit_enabled = bool(self.mmdit_cfg.get('enabled', False))
+        if self.mmdit_enabled:
+            self.logger.info("DiTFM MMDiT joint attention enabled with config: %s", self.mmdit_cfg)
+        else:
+            self.logger.info("DiTFM MMDiT joint attention disabled; using legacy cross-attention path")
+
         # Core components
         self.grasp_tokenizer = GraspTokenizer(self.d_x, self.d_model)
         
@@ -192,6 +206,7 @@ class DiTFM(nn.Module):
                 use_flash_attention=self.use_flash_attention,
                 attention_dropout=self.attention_dropout,
                 cross_attention_dropout=self.cross_attention_dropout,
+                mmdit_cfg=self.mmdit_cfg.copy()
             )
             for _ in range(self.num_layers)
         ])
