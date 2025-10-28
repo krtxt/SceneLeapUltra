@@ -127,22 +127,22 @@ class MemoryMonitor:
 class EfficientAttention(nn.Module):
     """
     Memory-efficient attention computation for large sequence lengths.
-    
+
     Implements several optimization strategies (in priority order):
     1. PyTorch 2.x SDPA (scaled_dot_product_attention) - preferred, auto-optimized
     2. Flash Attention 2 (if explicitly requested and available)
     3. Chunked attention computation (for very long sequences)
     4. Standard attention (fallback)
-    
+
     Features:
     - Automatic backend selection with PyTorch 2.x SDPA
     - Attention probability dropout for regularization
     - Mask support for handling padding
     """
-    
-    def __init__(self, d_model: int, num_heads: int, d_head: int, 
+
+    def __init__(self, d_model: int, num_heads: int, d_head: int,
                  dropout: float = 0.1, chunk_size: int = 512,
-                 use_flash_attention: bool = False, 
+                 use_flash_attention: bool = False,
                  attention_dropout: float = 0.0):
         super().__init__()
         self.d_model = d_model
@@ -153,23 +153,23 @@ class EfficientAttention(nn.Module):
         self.chunk_size = chunk_size
         self.use_flash_attention = use_flash_attention
         self.attention_dropout = attention_dropout
-        
+
         # Check if SDPA is available
         self.use_sdpa = _SDPA_AVAILABLE
-        
+
         self.to_q = nn.Linear(d_model, self.inner_dim, bias=False)
         self.to_k = nn.Linear(d_model, self.inner_dim, bias=False)
         self.to_v = nn.Linear(d_model, self.inner_dim, bias=False)
-        
+
         self.to_out = nn.Sequential(
             nn.Linear(self.inner_dim, d_model),
             nn.Dropout(dropout)
         )
-        
+
         # Attention probability dropout (applied after softmax)
         # Only used for non-SDPA paths (SDPA has built-in dropout support)
         self.attn_dropout = nn.Dropout(attention_dropout) if attention_dropout > 0.0 else None
-        
+
         # Try to import flash attention if explicitly requested (fallback option)
         self.flash_attn_func = None
         if use_flash_attention and not self.use_sdpa:
@@ -179,19 +179,19 @@ class EfficientAttention(nn.Module):
                 logging.info("Flash Attention 2 loaded as fallback (SDPA not available)")
             except ImportError:
                 logging.warning("Flash attention not available, using standard attention")
-    
-    def forward(self, query: torch.Tensor, key: Optional[torch.Tensor] = None, 
+
+    def forward(self, query: torch.Tensor, key: Optional[torch.Tensor] = None,
                 value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Memory-efficient attention forward pass.
-        
+
         Args:
             query: (B, seq_len_q, d_model)
             key: (B, seq_len_k, d_model) or None
             value: (B, seq_len_v, d_model) or None
             mask: Optional attention mask (1=valid, 0=padding)
                   Shape: (B, seq_len_k) or (B, seq_len_q, seq_len_k)
-            
+
         Returns:
             output: (B, seq_len_q, d_model)
         """
@@ -199,32 +199,32 @@ class EfficientAttention(nn.Module):
             key = query
         if value is None:
             value = key
-            
+
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
-        
+
         # Priority 1: Use PyTorch 2.x SDPA (recommended)
         if self.use_sdpa:
             return self._sdpa_attention_forward(query, key, value, mask)
-        
+
         # Priority 2: Use flash attention if available and sequences are long enough
-        if (self.flash_attn_func is not None and 
-            seq_len_q > 128 and seq_len_k > 128 and 
+        if (self.flash_attn_func is not None and
+            seq_len_q > 128 and seq_len_k > 128 and
             mask is None):  # Flash attention doesn't support custom masks easily
             return self._flash_attention_forward(query, key, value)
-        
+
         # Priority 3: Use chunked attention for very long sequences
         if seq_len_q > self.chunk_size or seq_len_k > self.chunk_size:
             return self._chunked_attention_forward(query, key, value, mask)
-        
+
         # Fallback: Standard attention for smaller sequences
         return self._standard_attention_forward(query, key, value, mask)
-    
-    def _sdpa_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
+
+    def _sdpa_attention_forward(self, query: torch.Tensor, key: torch.Tensor,
                                value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         PyTorch 2.x SDPA (Scaled Dot-Product Attention) implementation.
-        
+
         This is the preferred method when available, as it automatically selects
         the best backend (FlashAttention 2, Memory-efficient, or Math) and provides
         native support for dropout and masks.
@@ -232,12 +232,12 @@ class EfficientAttention(nn.Module):
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
-        
+
         # Reshape for multi-head attention: (B, seq_len, num_heads, d_head)
         q = q.view(q.shape[0], q.shape[1], self.num_heads, self.d_head)
         k = k.view(k.shape[0], k.shape[1], self.num_heads, self.d_head)
         v = v.view(v.shape[0], v.shape[1], self.num_heads, self.d_head)
-        
+
         # Convert mask format if provided
         # SDPA expects: (B, num_heads, seq_len_q, seq_len_k) with True=masked, False=valid
         # Our mask: (B, seq_len_k) or (B, seq_len_q, seq_len_k) with 1=valid, 0=padding
@@ -249,19 +249,19 @@ class EfficientAttention(nn.Module):
             elif mask.dim() == 3:
                 # (B, seq_len_q, seq_len_k) -> (B, 1, seq_len_q, seq_len_k)
                 attn_mask = mask.unsqueeze(1)
-            
+
             # Convert: 1=valid, 0=padding -> False=valid, True=masked
             attn_mask = (attn_mask == 0)
-        
+
         # Use SDPA with native dropout support
         dropout_p = self.attention_dropout if self.training else 0.0
-        
+
         # PyTorch SDPA expects (B, num_heads, seq_len, d_head) but we have (B, seq_len, num_heads, d_head)
         # Transpose: (B, seq_len, num_heads, d_head) -> (B, num_heads, seq_len, d_head)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        
+
         # Call SDPA
         # Note: SDPA automatically calculates scale as 1/sqrt(d_head)
         # Our self.scale = d_head ** -0.5 is the same, so we don't need to pass it
@@ -270,15 +270,320 @@ class EfficientAttention(nn.Module):
             attn_mask=attn_mask,
             dropout_p=dropout_p
         )
-        
+
         # Transpose back: (B, num_heads, seq_len, d_head) -> (B, seq_len, num_heads, d_head)
         out = out.transpose(1, 2)
-        
+
         # Reshape back to (B, seq_len, d_model)
         out = out.contiguous().view(out.shape[0], out.shape[1], self.inner_dim)
-        
+
         return self.to_out(out)
-    
+
+
+class JointAttention(nn.Module):
+    """Single-query modality-aware joint attention for MMDiT."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_head: int,
+        dropout: float = 0.1,
+        chunk_size: int = 512,
+        use_flash_attention: bool = False,
+        attention_dropout: float = 0.0,
+        separate_modality_projections: bool = True,
+        qkv_bias: bool = False,
+        qk_norm: bool = False,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
+        super().__init__()
+        self.logger = logger or logging.getLogger(__name__)
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_head = d_head
+        self.inner_dim = num_heads * d_head
+        self.scale = d_head ** -0.5
+        self.chunk_size = chunk_size
+        self.use_flash_attention = use_flash_attention
+        self.attention_dropout = attention_dropout
+        self.separate_modality_projections = separate_modality_projections
+        self.qkv_bias = qkv_bias
+        self.qk_norm_enabled = qk_norm
+
+        self.use_sdpa = _SDPA_AVAILABLE
+
+        if separate_modality_projections:
+            self.q_proj_grasp = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.k_proj_grasp = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.v_proj_grasp = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+
+            self.k_proj_scene = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.v_proj_scene = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+
+            self.k_proj_text = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.v_proj_text = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+        else:
+            self.to_q = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.to_k = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+            self.to_v = nn.Linear(d_model, self.inner_dim, bias=qkv_bias)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(self.inner_dim, d_model),
+            nn.Dropout(dropout)
+        )
+
+        self.attn_dropout = nn.Dropout(attention_dropout) if attention_dropout > 0.0 else None
+
+        if self.qk_norm_enabled:
+            self.q_norm_grasp = nn.LayerNorm(self.d_head)
+            self.k_norm_grasp = nn.LayerNorm(self.d_head)
+            self.k_norm_scene = nn.LayerNorm(self.d_head)
+            self.k_norm_text = nn.LayerNorm(self.d_head)
+        else:
+            self.q_norm_grasp = None
+            self.k_norm_grasp = None
+            self.k_norm_scene = None
+            self.k_norm_text = None
+
+        self.flash_attn_func = None
+        if use_flash_attention and not self.use_sdpa:
+            try:
+                from flash_attn import flash_attn_func
+                self.flash_attn_func = flash_attn_func
+                self.logger.info("JointAttention using Flash Attention fallback (SDPA unavailable)")
+            except ImportError:
+                self.logger.warning("JointAttention Flash Attention not available; falling back to chunk/standard")
+
+    def forward(
+        self,
+        grasp_tokens: torch.Tensor,
+        scene_tokens: Optional[torch.Tensor] = None,
+        text_tokens: Optional[torch.Tensor] = None,
+        scene_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if grasp_tokens is None:
+            raise ValueError("JointAttention requires grasp tokens")
+
+        B, grasp_len, _ = grasp_tokens.shape
+        scene_len = scene_tokens.shape[1] if scene_tokens is not None else 0
+        text_len = text_tokens.shape[1] if text_tokens is not None else 0
+
+        q = self._project_q(grasp_tokens)
+        k_list, v_list, mask_segments = self._project_and_collect_kv(
+            grasp_tokens=grasp_tokens,
+            scene_tokens=scene_tokens,
+            text_tokens=text_tokens,
+            scene_mask=scene_mask,
+        )
+
+        k = torch.cat(k_list, dim=2)
+        v = torch.cat(v_list, dim=2)
+        attention_mask = torch.cat(mask_segments, dim=1)
+
+        mask_bool = attention_mask <= 0.5
+        total_k = attention_mask.shape[1]
+
+        backend = "sdpa" if self.use_sdpa else None
+        try:
+            if self.use_sdpa:
+                out = self._sdpa_attention(q, k, v, mask_bool)
+            else:
+                out = self._fallback_attention(q, k, v, attention_mask, mask_bool)
+                backend = out[1]
+                out = out[0]
+        except RuntimeError as exc:
+            self.logger.warning(
+                "JointAttention SDPA failed (%s); falling back to chunked attention", exc
+            )
+            out, backend = self._chunked_attention(q, k, v, attention_mask), "chunk"
+
+        self.logger.debug(
+            "JointAttention backend=%s grasp=%d keys=%d (scene=%d, text=%d) mask_valid=%.2f",
+            backend,
+            grasp_len,
+            total_k,
+            scene_len,
+            text_len,
+            attention_mask.mean().item() if attention_mask.numel() > 0 else 0.0,
+        )
+
+        return self.to_out(out)
+
+    def _project_q(self, grasp_tokens: torch.Tensor) -> torch.Tensor:
+        if self.separate_modality_projections:
+            q = self.q_proj_grasp(grasp_tokens)
+        else:
+            q = self.to_q(grasp_tokens)
+        return self._reshape_with_heads(q, self.q_norm_grasp)
+
+    def _project_and_collect_kv(
+        self,
+        grasp_tokens: torch.Tensor,
+        scene_tokens: Optional[torch.Tensor],
+        text_tokens: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+    ):
+        device = grasp_tokens.device
+        dtype = grasp_tokens.dtype
+
+        k_list = []
+        v_list = []
+        mask_segments = []
+
+        k_g, v_g = self._project_grasp_kv(grasp_tokens)
+        k_list.append(k_g)
+        v_list.append(v_g)
+        mask_segments.append(torch.ones(grasp_tokens.shape[0], grasp_tokens.shape[1], device=device, dtype=dtype))
+
+        if scene_tokens is not None:
+            k_s, v_s = self._project_scene_kv(scene_tokens)
+            k_list.append(k_s)
+            v_list.append(v_s)
+            mask_segments.append(self._normalize_scene_mask(scene_mask, scene_tokens.shape[0], scene_tokens.shape[1], device, dtype))
+        if text_tokens is not None:
+            k_t, v_t = self._project_text_kv(text_tokens)
+            k_list.append(k_t)
+            v_list.append(v_t)
+            mask_segments.append(torch.ones(text_tokens.shape[0], text_tokens.shape[1], device=device, dtype=dtype))
+
+        return k_list, v_list, mask_segments
+
+    def _project_grasp_kv(self, grasp_tokens: torch.Tensor):
+        if self.separate_modality_projections:
+            k = self.k_proj_grasp(grasp_tokens)
+            v = self.v_proj_grasp(grasp_tokens)
+        else:
+            k = self.to_k(grasp_tokens)
+            v = self.to_v(grasp_tokens)
+        return self._reshape_with_heads(k, self.k_norm_grasp), self._reshape_with_heads(v)
+
+    def _project_scene_kv(self, scene_tokens: torch.Tensor):
+        if self.separate_modality_projections:
+            k = self.k_proj_scene(scene_tokens)
+            v = self.v_proj_scene(scene_tokens)
+        else:
+            k = self.to_k(scene_tokens)
+            v = self.to_v(scene_tokens)
+        return self._reshape_with_heads(k, self.k_norm_scene), self._reshape_with_heads(v)
+
+    def _project_text_kv(self, text_tokens: torch.Tensor):
+        if self.separate_modality_projections:
+            k = self.k_proj_text(text_tokens)
+            v = self.v_proj_text(text_tokens)
+        else:
+            k = self.to_k(text_tokens)
+            v = self.to_v(text_tokens)
+        return self._reshape_with_heads(k, self.k_norm_text), self._reshape_with_heads(v)
+
+    def _reshape_with_heads(self, tensor: torch.Tensor, norm: Optional[nn.LayerNorm] = None) -> torch.Tensor:
+        B, seq_len, _ = tensor.shape
+        tensor = tensor.view(B, seq_len, self.num_heads, self.d_head).transpose(1, 2)
+        if norm is not None:
+            tensor = norm(tensor)
+        return tensor
+
+    def _normalize_scene_mask(self, mask: Optional[torch.Tensor], batch: int, length: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        if mask is None:
+            self.logger.debug("JointAttention scene mask missing; defaulting to all-valid")
+            return torch.ones(batch, length, device=device, dtype=dtype)
+
+        if not torch.is_tensor(mask):
+            self.logger.warning("JointAttention scene_mask is not tensor (got %s); treating as all-valid", type(mask))
+            return torch.ones(batch, length, device=device, dtype=dtype)
+
+        mask_tensor = mask.to(device=device)
+        if mask_tensor.dim() == 3 and mask_tensor.shape[1] == 1:
+            mask_tensor = mask_tensor.squeeze(1)
+        elif mask_tensor.dim() == 3 and mask_tensor.shape[1] != 1:
+            self.logger.warning("JointAttention scene_mask has unexpected shape %s; using first slice", mask_tensor.shape)
+            mask_tensor = mask_tensor[:, 0, :]
+        elif mask_tensor.dim() != 2:
+            self.logger.warning("JointAttention scene_mask dim=%d; expected 2 or 3", mask_tensor.dim())
+            mask_tensor = mask_tensor.reshape(mask_tensor.shape[0], -1)
+
+        if mask_tensor.shape != (batch, length):
+            self.logger.warning("JointAttention scene_mask shape %s mismatched with scene tokens %s; broadcasting if possible", mask_tensor.shape, (batch, length))
+            mask_tensor = mask_tensor[..., :length]
+
+        if mask_tensor.dtype == torch.bool:
+            mask_tensor = mask_tensor.float()
+        else:
+            mask_tensor = mask_tensor.to(dtype=dtype)
+
+        return mask_tensor
+
+    def _sdpa_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask_bool: torch.Tensor) -> torch.Tensor:
+        dropout_p = self.attention_dropout if self.training else 0.0
+        # Convert boolean mask: if all False (all valid), pass None
+        # Otherwise, convert to float mask (0.0=valid, -inf=masked)
+        if mask_bool.any():
+            mask_expanded = mask_bool.unsqueeze(1).unsqueeze(1)
+            attn_mask = torch.zeros_like(mask_expanded, dtype=q.dtype)
+            attn_mask = attn_mask.masked_fill(mask_expanded, float('-inf'))
+        else:
+            attn_mask = None
+        
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p)
+        out = out.transpose(1, 2).contiguous().view(q.shape[0], q.shape[2], self.inner_dim)
+        return out
+
+    def _fallback_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_bool: torch.Tensor,
+    ) -> Tuple[torch.Tensor, str]:
+        seq_len_q = q.shape[2]
+        seq_len_k = k.shape[2]
+        if (self.flash_attn_func is not None and seq_len_q > 128 and seq_len_k > 128 and mask_bool is not None and not mask_bool.any()):
+            return self._flash_attention(q, k, v), "flash"
+        if seq_len_q > self.chunk_size or seq_len_k > self.chunk_size:
+            return self._chunked_attention(q, k, v, attention_mask), "chunk"
+        return self._standard_attention(q, k, v, attention_mask), "standard"
+
+    def _flash_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        if self.flash_attn_func is None:
+            raise RuntimeError("Flash attention is not available")
+        dropout_p = self.attention_dropout if self.training else 0.0
+        out = self.flash_attn_func(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), dropout_p=dropout_p, softmax_scale=self.scale)
+        out = out.contiguous().view(q.shape[0], q.shape[2], self.inner_dim)
+        return out
+
+    def _chunked_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        B, num_heads, seq_len_k, _ = k.shape
+        seq_len_q = q.shape[2]
+        outputs = []
+        scale = self.scale
+        for start in range(0, seq_len_q, self.chunk_size):
+            end = min(start + self.chunk_size, seq_len_q)
+            q_chunk = q[:, :, start:end, :]
+            attn_scores = torch.einsum('bhid,bhjd->bhij', q_chunk, k) * scale
+            if mask is not None:
+                mask_chunk = mask[:, None, None, :]
+                attn_scores = attn_scores.masked_fill(mask_chunk <= 0.5, -float('inf'))
+            attn_probs = torch.softmax(attn_scores, dim=-1)
+            if self.attn_dropout is not None and self.training:
+                attn_probs = self.attn_dropout(attn_probs)
+            outputs.append(torch.einsum('bhij,bhjd->bhid', attn_probs, v))
+        out = torch.cat(outputs, dim=2)
+        out = out.transpose(1, 2).contiguous().view(B, seq_len_q, self.inner_dim)
+        return out
+
+    def _standard_attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        attn_scores = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
+        if mask is not None:
+            mask = mask[:, None, None, :]
+            attn_scores = attn_scores.masked_fill(mask <= 0.5, -float('inf'))
+        attn_probs = torch.softmax(attn_scores, dim=-1)
+        if self.attn_dropout is not None and self.training:
+            attn_probs = self.attn_dropout(attn_probs)
+        out = torch.einsum('bhij,bhjd->bhid', attn_probs, v)
+        out = out.transpose(1, 2).contiguous().view(q.shape[0], q.shape[2], self.inner_dim)
+        return out
+
     def _flash_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
                                 value: torch.Tensor) -> torch.Tensor:
         """Flash attention implementation with dropout support."""
