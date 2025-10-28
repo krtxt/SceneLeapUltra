@@ -21,6 +21,9 @@ from utils.hand_helper import denorm_hand_pose_robust
 from utils.hand_model import HandModel, HandModelType
 
 from .matcher import Matcher
+from .set_distance import GraspSetDistance, extract_grasp_components, compute_pairwise_grasp_distance
+from .set_losses import compute_set_losses, compute_timestep_weight
+from .set_metrics import compute_set_metrics
 
 
 class GraspLossPose(nn.Module):
@@ -73,6 +76,32 @@ class GraspLossPose(nn.Module):
 
         # Configure hand model parameters
         self._configure_hand_model_kwargs()
+
+        # Set-based grasp learning configuration
+        self.set_distance_cfg = getattr(loss_cfg, 'set_distance', None)
+        self.set_loss_cfg = getattr(loss_cfg, 'set_loss', None)
+        self.set_metrics_cfg = getattr(loss_cfg, 'set_metrics', None)
+        
+        # Enable set losses and metrics
+        self.use_set_losses = (self.set_loss_cfg is not None and 
+                               getattr(self.set_loss_cfg, 'enabled', False))
+        self.use_set_metrics = (self.set_metrics_cfg is not None and 
+                                getattr(self.set_metrics_cfg, 'enabled', False))
+        
+        if self.use_set_losses:
+            logging.info(
+                f"Set-based losses enabled: OT={self.set_loss_cfg.get('lambda_ot', 0)}, "
+                f"CD={self.set_loss_cfg.get('gamma_cd', 0)}, "
+                f"Rep={self.set_loss_cfg.get('eta_repulsion', 0)}, "
+                f"Phys={self.set_loss_cfg.get('zeta_physics', 0)}"
+            )
+        
+        if self.use_set_metrics:
+            logging.info(
+                f"Set-based metrics enabled: Coverage={self.set_metrics_cfg.get('compute_coverage', False)}, "
+                f"MMD={self.set_metrics_cfg.get('compute_mmd', False)}, "
+                f"Diversity={self.set_metrics_cfg.get('compute_diversity', False)}"
+            )
 
     def _init_loss_functions(self):
         """Initializes the mapping from loss names to their calculation functions."""
@@ -238,9 +267,28 @@ class GraspLossPose(nn.Module):
 
             # Return standardized losses but keep standard losses for logging
             standardized_losses['_standard_losses'] = standard_losses
+            
+            # Add set-based metrics if enabled
+            if self.use_set_metrics:
+                try:
+                    set_metrics = self._calculate_set_metrics(outputs, targets)
+                    standardized_losses['_set_metrics'] = set_metrics
+                except Exception as e:
+                    logging.error(f"Set metrics calculation failed: {e}", exc_info=True)
+            
             return standardized_losses
         else:
-            return self._calculate_losses(outputs, targets)
+            losses = self._calculate_losses(outputs, targets)
+            
+            # Add set-based metrics if enabled
+            if self.use_set_metrics:
+                try:
+                    set_metrics = self._calculate_set_metrics(outputs, targets)
+                    losses['_set_metrics'] = set_metrics
+                except Exception as e:
+                    logging.error(f"Set metrics calculation failed: {e}", exc_info=True)
+            
+            return losses
 
     def _forward_test(self, pred_dict, batch):
         outputs, _ = self.pose_processor.process_test(pred_dict, batch, self.matcher)
@@ -288,6 +336,14 @@ class GraspLossPose(nn.Module):
             else:
                 available_losses = list(self.loss_func_map.keys())
                 raise NotImplementedError(f"Unable to calculate {name} loss. Available losses: {available_losses}")
+
+        # Add set-based losses if enabled
+        if self.use_set_losses:
+            try:
+                set_losses = self._calculate_set_losses(outputs, targets)
+                losses.update(set_losses)
+            except Exception as e:
+                logging.error(f"Set loss calculation failed: {e}", exc_info=True)
 
         return losses
 
@@ -472,3 +528,142 @@ class GraspLossPose(nn.Module):
         matched_queries = matcher_output['query_matched_mask'].sum().item()
         total_queries = matcher_output['query_matched_mask'].numel()
         print(f"Total Matched Queries: {matched_queries}/{total_queries}")
+    
+    def _calculate_set_losses(self, outputs, targets, current_timestep=None):
+        """
+        Calculate set-based losses for grasp set learning.
+        
+        Args:
+            outputs: Dict containing predictions
+            targets: Dict containing targets
+            current_timestep: Optional timestep for scheduling (not available in loss calculation)
+            
+        Returns:
+            Dict of set losses
+        """
+        device = self._get_device(*outputs.values()) if outputs else torch.device('cpu')
+        
+        # Extract predicted and target poses
+        if 'matched' not in outputs or 'norm_pose' not in outputs['matched']:
+            logging.debug("No matched predictions found for set loss calculation")
+            return {}
+        
+        if 'matched' not in targets or 'norm_pose' not in targets['matched']:
+            logging.debug("No matched targets found for set loss calculation")
+            return {}
+        
+        pred_poses = outputs['matched']['norm_pose']  # [B, N, pose_dim]
+        target_poses = targets['matched']['norm_pose']  # [B, M, pose_dim]
+        
+        # Check if we have multi-grasp data
+        if pred_poses.dim() != 3 or target_poses.dim() != 3:
+            logging.debug(f"Set losses require 3D tensors, got pred: {pred_poses.dim()}D, target: {target_poses.dim()}D")
+            return {}
+        
+        B, N, pose_dim = pred_poses.shape
+        M = target_poses.shape[1]
+        
+        logging.info(f"Computing set losses for {B} scenes with {N} predictions and {M} targets")
+        
+        # Compute distance matrix using configured distance function
+        try:
+            distance_matrix = compute_pairwise_grasp_distance(
+                pred_poses, 
+                target_poses,
+                distance_cfg=dict(self.set_distance_cfg) if self.set_distance_cfg else {},
+                rot_type=self.rot_type
+            )
+            
+            logging.debug(f"Distance matrix computed: shape={distance_matrix.shape}, "
+                         f"mean={distance_matrix.mean().item():.4f}, "
+                         f"min={distance_matrix.min().item():.4f}, "
+                         f"max={distance_matrix.max().item():.4f}")
+            
+        except Exception as e:
+            logging.error(f"Failed to compute distance matrix: {e}", exc_info=True)
+            return {}
+        
+        # Compute set losses
+        try:
+            set_losses = compute_set_losses(
+                pred_dict=outputs,
+                targets=targets,
+                distance_matrix=distance_matrix,
+                set_loss_cfg=dict(self.set_loss_cfg) if self.set_loss_cfg else {},
+                hand_model=self.hand_model,
+                current_timestep=current_timestep,
+                total_timesteps=1000  # Default, could be passed from config
+            )
+            
+            logging.info(f"Set losses computed: {', '.join([f'{k}={v.item():.4f}' for k, v in set_losses.items()])}")
+            
+            return set_losses
+            
+        except Exception as e:
+            logging.error(f"Failed to compute set losses: {e}", exc_info=True)
+            return {}
+    
+    def _calculate_set_metrics(self, outputs, targets):
+        """
+        Calculate set-based metrics for validation.
+        
+        Args:
+            outputs: Dict containing predictions
+            targets: Dict containing targets
+            
+        Returns:
+            Dict of set metrics
+        """
+        device = self._get_device(*outputs.values()) if outputs else torch.device('cpu')
+        
+        # Extract predicted and target poses
+        if 'matched' not in outputs or 'norm_pose' not in outputs['matched']:
+            logging.debug("No matched predictions found for set metrics calculation")
+            return {}
+        
+        if 'matched' not in targets or 'norm_pose' not in targets['matched']:
+            logging.debug("No matched targets found for set metrics calculation")
+            return {}
+        
+        pred_poses = outputs['matched']['norm_pose']  # [B, N, pose_dim]
+        target_poses = targets['matched']['norm_pose']  # [B, M, pose_dim]
+        
+        # Check if we have multi-grasp data
+        if pred_poses.dim() != 3 or target_poses.dim() != 3:
+            logging.debug(f"Set metrics require 3D tensors, got pred: {pred_poses.dim()}D, target: {target_poses.dim()}D")
+            return {}
+        
+        B, N, pose_dim = pred_poses.shape
+        M = target_poses.shape[1]
+        
+        logging.info(f"Computing set metrics for {B} scenes with {N} predictions and {M} targets")
+        
+        # Compute distance matrix
+        try:
+            distance_matrix = compute_pairwise_grasp_distance(
+                pred_poses, 
+                target_poses,
+                distance_cfg=dict(self.set_distance_cfg) if self.set_distance_cfg else {},
+                rot_type=self.rot_type
+            )
+            
+        except Exception as e:
+            logging.error(f"Failed to compute distance matrix for metrics: {e}", exc_info=True)
+            return {}
+        
+        # Compute set metrics
+        try:
+            set_metrics = compute_set_metrics(
+                pred_poses=pred_poses,
+                target_poses=target_poses,
+                distance_matrix=distance_matrix,
+                metric_cfg=dict(self.set_metrics_cfg) if self.set_metrics_cfg else {}
+            )
+            
+            logging.info(f"Set metrics computed: {', '.join([f'{k}={v:.4f}' for k, v in set_metrics.items()])}")
+            
+            return set_metrics
+            
+        except Exception as e:
+            logging.error(f"Failed to compute set metrics: {e}", exc_info=True)
+            return {}

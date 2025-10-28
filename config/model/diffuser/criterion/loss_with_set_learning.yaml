@@ -1,0 +1,135 @@
+# Configuration file with set-based grasp learning ENABLED
+# This is an example showing how to use set losses and metrics
+
+mode: ${mode}
+device: 'cuda:0'
+rot_type: ${rot_type}
+
+hand_model:
+  n_surface_points: 1024
+  rot_type: ${rot_type}
+
+loss_weights:
+  translation: 20.0
+  rotation: 20.0
+  qpos: 1.0
+  neg_loss: 0.0
+  hand_chamfer: 1.0
+
+standardized_validation_loss:
+  enabled: true
+  
+  weights:
+    translation: 10.0
+    rotation: 10.0
+    qpos: 5.0
+    hand_chamfer: 2.0
+    neg_loss: 0.0
+  
+  normalization:
+    normalize_by_num_grasps: true
+    normalize_by_batch_size: true
+    use_sample_level_mean: true
+  
+  aggregation:
+    strategy: "mean"
+    ignore_invalid_grasps: true
+  
+  quality_metrics:
+    include_penetration_penalty: false
+    include_contact_quality: false
+    penetration_weight: 1.0
+    contact_weight: 0.5
+
+use_negative_prompts: ${use_negative_prompts}
+
+multi_grasp:
+  loss_aggregation: "mean"
+  use_consistency_loss: true
+  consistency_loss_weight: 0.1
+  diversity_loss_weight: 0.05
+
+cost_weights:
+  translation: 2.0
+  rotation: 2.0
+  qpos: 1.0
+
+scale: 0.1
+
+q1:
+  lambda_torque: 10
+  m: 8
+  mu: 1
+  nms: true
+  thres_contact: 0.01
+  thres_pen: 0.005
+  thres_tpen: 0.01
+  rot_type: ${rot_type}
+
+# ============================================================================
+# Set-based Grasp Learning Configuration (ENABLED)
+# ============================================================================
+
+set_distance:
+  alpha_translation: 1.0
+  alpha_rotation: 1.0
+  alpha_qpos: 0.5
+  alpha_symmetry: 0.0
+  alpha_contact: 0.0
+  
+  rot_type: ${rot_type}
+  normalize_translation: true
+  qpos_range: [0.0, 1.0]
+  use_symmetry: false
+  symmetry_group: null
+
+set_loss:
+  enabled: true               # ← ENABLED
+  
+  # Recommended starting weights
+  lambda_ot: 0.5              # Optimal Transport loss
+  gamma_cd: 0.5               # Chamfer Distance loss
+  eta_repulsion: 0.05         # Diversity regularization
+  zeta_physics: 0.0           # Physics loss (disabled by default)
+  
+  # Cosine schedule: gradually increase weight as noise decreases
+  schedule_type: "cosine"
+  final_weight: 1.0
+  
+  ot_config:
+    epsilon: 0.1
+    tau: 1.0
+    max_iter: 100
+    threshold: 1e-3
+    max_samples: 128          # Lower for faster training
+  
+  cd_config: {}
+  
+  repulsion_config:
+    k: 5
+    lambda_repulsion: 1.0
+    delta: 0.01
+    s: 2.0
+  
+  physics_config:
+    penetration_weight: 1.0
+    contact_weight: 0.5
+    penetration_threshold: 0.005
+
+set_metrics:
+  enabled: true               # ← ENABLED
+  
+  compute_coverage: true
+  compute_mmd: true
+  compute_diversity: true
+  compute_precision_recall: false
+  
+  coverage_config:
+    thresholds: [0.05, 0.1, 0.2]
+  
+  mmd_config: {}
+  
+  diversity_config: {}
+  
+  pr_config:
+    threshold: 0.1

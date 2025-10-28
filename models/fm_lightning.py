@@ -275,6 +275,9 @@ class FlowMatchingLightning(pl.LightningModule):
         # Compute validation losses
         loss_dict = self.criterion(pred_dict, batch, mode='val')
 
+        # Extract set-based metrics if present
+        set_metrics = loss_dict.pop('_set_metrics', {})
+
         # Handle standardized validation loss (align with DDPMLightning)
         if hasattr(self.criterion, 'use_standardized_val_loss') and self.criterion.use_standardized_val_loss:
             # Extract standard losses for logging
@@ -300,6 +303,11 @@ class FlowMatchingLightning(pl.LightningModule):
             self.log("val/standardized_loss", loss, prog_bar=True, batch_size=batch_size, sync_dist=True)
             self.log("val/standard_loss", standard_loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
 
+            # Log set-based metrics if present
+            if set_metrics:
+                for metric_name, metric_value in set_metrics.items():
+                    self.log(f"val/set_{metric_name}", metric_value, prog_bar=False, batch_size=batch_size, sync_dist=True)
+
             # Store both for epoch-end processing
             self.validation_step_outputs.append({
                 "loss": loss.item(),
@@ -307,6 +315,7 @@ class FlowMatchingLightning(pl.LightningModule):
                 "standard_loss": standard_loss.item(),
                 "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
                 "standard_loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in standard_loss_dict.items()},
+                "set_metrics": set_metrics
             })
         else:
             # Standard validation loss calculation
@@ -317,9 +326,15 @@ class FlowMatchingLightning(pl.LightningModule):
             )
             self.log("val/loss", loss, prog_bar=False, batch_size=batch_size, sync_dist=True)
 
+            # Log set-based metrics if present
+            if set_metrics:
+                for metric_name, metric_value in set_metrics.items():
+                    self.log(f"val/set_{metric_name}", metric_value, prog_bar=False, batch_size=batch_size, sync_dist=True)
+
             self.validation_step_outputs.append({
                 "loss": loss.item(),
                 "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
+                "set_metrics": set_metrics
             })
 
         return {"loss": loss, "loss_dict": loss_dict}
