@@ -51,6 +51,39 @@ cost_weights:
   rotation: 2.0
   qpos: 1.0
 
+set_loss:
+  enable: true
+  schedule:
+    type: none
+    final_weight: 1.0
+  weights:
+    cd: 1.0
+    ot: 0.0
+    repulsion: 0.0
+    phys: 0.0
+  ot:
+    eps: 0.05
+    tau: 0.5
+    iters: 50
+    subsample: 256
+  repulsion:
+    k: 4
+    s: 2.0
+    delta: 1.0e-3
+  cost_weights:
+    translation: ${cost_weights.translation}
+    rotation: ${cost_weights.rotation}
+    qpos: ${cost_weights.qpos}
+
+set_metrics:
+  enable: true
+  cov_threshold: 0.2
+  max_samples: 256
+  log:
+    cov: true
+    mmd: true
+    nnd: true
+
 scale: 0.1
 
 q1:
