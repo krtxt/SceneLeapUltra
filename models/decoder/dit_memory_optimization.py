@@ -170,6 +170,13 @@ class EfficientAttention(nn.Module):
         # Only used for non-SDPA paths (SDPA has built-in dropout support)
         self.attn_dropout = nn.Dropout(attention_dropout) if attention_dropout > 0.0 else None
         
+        # Optional stabilization features (configured externally)
+        self.enable_qk_rmsnorm: bool = False
+        self.enable_softclamp: bool = False
+        self.softclamp_value: float = 50.0
+        self.rmsnorm_eps: float = 1e-6
+        self._softclamp_warning_emitted: bool = False
+        
         # Try to import flash attention if explicitly requested (fallback option)
         self.flash_attn_func = None
         if use_flash_attention and not self.use_sdpa:
@@ -181,7 +188,10 @@ class EfficientAttention(nn.Module):
                 logging.warning("Flash attention not available, using standard attention")
     
     def forward(self, query: torch.Tensor, key: Optional[torch.Tensor] = None, 
-                value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None,
+                q_scale: Optional[torch.Tensor] = None, q_shift: Optional[torch.Tensor] = None,
+                k_scale: Optional[torch.Tensor] = None, k_shift: Optional[torch.Tensor] = None,
+                v_scale: Optional[torch.Tensor] = None, v_shift: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Memory-efficient attention forward pass.
         
@@ -191,6 +201,9 @@ class EfficientAttention(nn.Module):
             value: (B, seq_len_v, d_model) or None
             mask: Optional attention mask (1=valid, 0=padding)
                   Shape: (B, seq_len_k) or (B, seq_len_q, seq_len_k)
+            q_scale/q_shift/k_scale/k_shift/v_scale/v_shift: Optional modulation tensors applied
+                element-wise to the projected queries, keys, and values. Shapes should be broadcastable
+                to (B, seq_len, num_heads * d_head) for the corresponding tensor.
             
         Returns:
             output: (B, seq_len_q, d_model)
@@ -202,28 +215,42 @@ class EfficientAttention(nn.Module):
             
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
+        modulation = {
+            "q_scale": q_scale,
+            "q_shift": q_shift,
+            "k_scale": k_scale,
+            "k_shift": k_shift,
+            "v_scale": v_scale,
+            "v_shift": v_shift,
+        }
         
         # Priority 1: Use PyTorch 2.x SDPA (recommended)
         if self.use_sdpa:
-            return self._sdpa_attention_forward(query, key, value, mask)
+            if self.enable_softclamp and not self._softclamp_warning_emitted:
+                logging.warning("softclamp is not applied under SDPA backend")
+                self._softclamp_warning_emitted = True
+            return self._sdpa_attention_forward(query, key, value, mask, **modulation)
         
         # Priority 2: Use flash attention if available and sequences are long enough
         if (self.flash_attn_func is not None and 
             seq_len_q > 128 and seq_len_k > 128 and 
             mask is None):  # Flash attention doesn't support custom masks easily
-            return self._flash_attention_forward(query, key, value)
+            return self._flash_attention_forward(query, key, value, **modulation)
         
         # Priority 3: Use chunked attention for very long sequences
         if seq_len_q > self.chunk_size or seq_len_k > self.chunk_size:
-            return self._chunked_attention_forward(query, key, value, mask)
+            return self._chunked_attention_forward(query, key, value, mask, **modulation)
         
         # Fallback: Standard attention for smaller sequences
-        return self._standard_attention_forward(query, key, value, mask)
+        return self._standard_attention_forward(query, key, value, mask, **modulation)
     
     def _sdpa_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
-                               value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                               value: torch.Tensor, mask: Optional[torch.Tensor] = None,
+                               q_scale: Optional[torch.Tensor] = None, q_shift: Optional[torch.Tensor] = None,
+                               k_scale: Optional[torch.Tensor] = None, k_shift: Optional[torch.Tensor] = None,
+                               v_scale: Optional[torch.Tensor] = None, v_shift: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        PyTorch 2.x SDPA (Scaled Dot-Product Attention) implementation.
+        PyTorch 2.x SDPA (Scaled Dot-Product Attention) implementation with optional Q/K/V modulation.
         
         This is the preferred method when available, as it automatically selects
         the best backend (FlashAttention 2, Memory-efficient, or Math) and provides
@@ -232,6 +259,14 @@ class EfficientAttention(nn.Module):
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
+        
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
+        q = self._apply_modulation(q, q_scale, q_shift, "q")
+        k = self._apply_modulation(k, k_scale, k_shift, "k")
+        v = self._apply_modulation(v, v_scale, v_shift, "v")
         
         # Reshape for multi-head attention: (B, seq_len, num_heads, d_head)
         q = q.view(q.shape[0], q.shape[1], self.num_heads, self.d_head)
@@ -280,11 +315,22 @@ class EfficientAttention(nn.Module):
         return self.to_out(out)
     
     def _flash_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
-                                value: torch.Tensor) -> torch.Tensor:
-        """Flash attention implementation with dropout support."""
+                                value: torch.Tensor,
+                                q_scale: Optional[torch.Tensor] = None, q_shift: Optional[torch.Tensor] = None,
+                                k_scale: Optional[torch.Tensor] = None, k_shift: Optional[torch.Tensor] = None,
+                                v_scale: Optional[torch.Tensor] = None, v_shift: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Flash attention implementation with dropout support and optional Q/K/V modulation."""
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
+        
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
+        q = self._apply_modulation(q, q_scale, q_shift, "q")
+        k = self._apply_modulation(k, k_scale, k_shift, "k")
+        v = self._apply_modulation(v, v_scale, v_shift, "v")
         
         # Reshape for flash attention: (B, seq_len, num_heads, d_head)
         q = q.view(q.shape[0], q.shape[1], self.num_heads, self.d_head)
@@ -302,14 +348,25 @@ class EfficientAttention(nn.Module):
         return self.to_out(out)
     
     def _chunked_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
-                                  value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Chunked attention for memory efficiency with long sequences and dropout support."""
+                                  value: torch.Tensor, mask: Optional[torch.Tensor] = None,
+                                  q_scale: Optional[torch.Tensor] = None, q_shift: Optional[torch.Tensor] = None,
+                                  k_scale: Optional[torch.Tensor] = None, k_shift: Optional[torch.Tensor] = None,
+                                  v_scale: Optional[torch.Tensor] = None, v_shift: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Chunked attention for memory efficiency with long sequences, dropout, and optional Q/K/V modulation."""
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
         
         q = self.to_q(query)
         k = self.to_k(key)
         v = self.to_v(value)
+        
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
+        q = self._apply_modulation(q, q_scale, q_shift, "q")
+        k = self._apply_modulation(k, k_scale, k_shift, "k")
+        v = self._apply_modulation(v, v_scale, v_shift, "v")
         
         # Reshape for multi-head attention
         q = q.view(B, seq_len_q, self.num_heads, self.d_head).transpose(1, 2)  # (B, num_heads, seq_len_q, d_head)
@@ -325,6 +382,10 @@ class EfficientAttention(nn.Module):
             
             # Compute attention scores for this chunk
             scores = torch.einsum('bhid,bhjd->bhij', q_chunk, k) * self.scale
+            
+            if self.enable_softclamp:
+                clamp_val = float(max(self.softclamp_value, 1e-6))
+                scores = torch.tanh(scores / clamp_val) * clamp_val
             
             if mask is not None:
                 # Handle different mask shapes
@@ -356,8 +417,11 @@ class EfficientAttention(nn.Module):
         return self.to_out(out)
     
     def _standard_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
-                                   value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Standard attention implementation with dropout support."""
+                                   value: torch.Tensor, mask: Optional[torch.Tensor] = None,
+                                   q_scale: Optional[torch.Tensor] = None, q_shift: Optional[torch.Tensor] = None,
+                                   k_scale: Optional[torch.Tensor] = None, k_shift: Optional[torch.Tensor] = None,
+                                   v_scale: Optional[torch.Tensor] = None, v_shift: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Standard attention implementation with dropout support and optional Q/K/V modulation."""
         from einops import rearrange
         
         B, seq_len_q, _ = query.shape
@@ -366,6 +430,14 @@ class EfficientAttention(nn.Module):
         k = self.to_k(key)
         v = self.to_v(value)
         
+        if self.enable_qk_rmsnorm:
+            q = self._apply_rmsnorm(q)
+            k = self._apply_rmsnorm(k)
+        
+        q = self._apply_modulation(q, q_scale, q_shift, "q")
+        k = self._apply_modulation(k, k_scale, k_shift, "k")
+        v = self._apply_modulation(v, v_scale, v_shift, "v")
+        
         # Reshape for multi-head attention
         q = rearrange(q, 'b n (h d) -> b h n d', h=self.num_heads)
         k = rearrange(k, 'b n (h d) -> b h n d', h=self.num_heads)
@@ -373,6 +445,10 @@ class EfficientAttention(nn.Module):
         
         # Compute attention scores
         scores = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
+        
+        if self.enable_softclamp:
+            clamp_val = float(max(self.softclamp_value, 1e-6))
+            scores = torch.tanh(scores / clamp_val) * clamp_val
         
         if mask is not None:
             # Handle different mask shapes
@@ -396,40 +472,112 @@ class EfficientAttention(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)')
         
         return self.to_out(out)
+    
+    def _apply_rmsnorm(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor is None:
+            return tensor
+        rms = tensor.pow(2).mean(dim=-1, keepdim=True)
+        return tensor * torch.rsqrt(rms + self.rmsnorm_eps)
 
+    def _prepare_modulation(self, modulation: torch.Tensor, reference: torch.Tensor, label: str) -> torch.Tensor:
+        target_shape = reference.shape
+        if modulation.dim() == 1:
+            modulation = modulation.view(1, 1, -1)
+        elif modulation.dim() == 2:
+            if modulation.shape[0] in (1, target_shape[0]) and modulation.shape[1] == target_shape[2]:
+                modulation = modulation.unsqueeze(1)
+            elif modulation.shape[0] == target_shape[1] and modulation.shape[1] == target_shape[2]:
+                modulation = modulation.unsqueeze(0)
+            elif modulation.shape[0] in (1, target_shape[0]) and modulation.shape[1] == 1:
+                modulation = modulation.unsqueeze(-1)
+            else:
+                modulation = modulation.unsqueeze(0).unsqueeze(0)
+        elif modulation.dim() != 3:
+            raise RuntimeError(
+                f"Unsupported modulation rank for {label}: {modulation.dim()}D"
+            )
+        try:
+            modulation = torch.broadcast_to(modulation, target_shape)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Unable to broadcast modulation {label} with shape {tuple(modulation.shape)} "
+                f"to reference {tuple(target_shape)}"
+            ) from exc
+        return modulation
+    
+    def _apply_modulation(self, tensor: torch.Tensor,
+                          scale: Optional[torch.Tensor],
+                          shift: Optional[torch.Tensor],
+                          name: str) -> torch.Tensor:
+        if scale is not None:
+            scale = self._prepare_modulation(scale.to(device=tensor.device, dtype=tensor.dtype), tensor, f"{name}_scale")
+            tensor = tensor * (1 + scale)
+        if shift is not None:
+            shift = self._prepare_modulation(shift.to(device=tensor.device, dtype=tensor.dtype), tensor, f"{name}_shift")
+            tensor = tensor + shift
+        return tensor
+    
 
 class GradientCheckpointedDiTBlock(nn.Module):
     """
     DiT block with gradient checkpointing support for memory optimization.
     """
-    
+
     def __init__(self, dit_block: nn.Module, use_checkpointing: bool = True):
         super().__init__()
         self.dit_block = dit_block
         self.use_checkpointing = use_checkpointing
-    
-    def forward(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
-                scene_context: Optional[torch.Tensor] = None, 
-                text_context: Optional[torch.Tensor] = None,
-                scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        time_emb: Optional[torch.Tensor] = None,
+        scene_context: Optional[torch.Tensor] = None,
+        text_context: Optional[torch.Tensor] = None,
+        scene_mask: Optional[torch.Tensor] = None,
+        text_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Forward pass with optional gradient checkpointing.
         """
         if self.use_checkpointing and self.training:
             return checkpoint.checkpoint(
                 self._forward_impl,
-                x, time_emb, scene_context, text_context, scene_mask,
-                use_reentrant=False
+                x,
+                time_emb,
+                scene_context,
+                text_context,
+                scene_mask,
+                text_mask,
+                use_reentrant=False,
             )
-        else:
-            return self._forward_impl(x, time_emb, scene_context, text_context, scene_mask)
-    
-    def _forward_impl(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
-                     scene_context: Optional[torch.Tensor] = None, 
-                     text_context: Optional[torch.Tensor] = None,
-                     scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self._forward_impl(
+            x,
+            time_emb,
+            scene_context,
+            text_context,
+            scene_mask,
+            text_mask,
+        )
+
+    def _forward_impl(
+        self,
+        x: torch.Tensor,
+        time_emb: Optional[torch.Tensor] = None,
+        scene_context: Optional[torch.Tensor] = None,
+        text_context: Optional[torch.Tensor] = None,
+        scene_mask: Optional[torch.Tensor] = None,
+        text_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Actual forward implementation."""
-        return self.dit_block(x, time_emb, scene_context, text_context, scene_mask)
+        return self.dit_block(
+            x,
+            time_emb,
+            scene_context,
+            text_context,
+            scene_mask,
+            text_mask=text_mask,
+        )
 
 
 class BatchProcessor:

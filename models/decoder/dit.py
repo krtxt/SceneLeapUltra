@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import math
 import logging
-from typing import Dict, Optional, Any, Tuple, Sequence
+from typing import Dict, Optional, Any, Tuple, Sequence, List
+from omegaconf import OmegaConf, DictConfig
 try:
     import numpy as np
 except ImportError:  # pragma: no cover - numpy should be available but guard anyway
@@ -12,7 +13,7 @@ from contextlib import nullcontext
 
 from models.utils.diffusion_utils import timestep_embedding
 from models.backbone import build_backbone
-from .dit_utils import adjust_backbone_config, init_weights
+from .dit_utils import adjust_backbone_config, init_weights, build_attn_mask_all
 from models.utils.text_encoder import TextConditionProcessor, PosNegTextEncoder
 from .dit_conditioning import ensure_text_encoder, prepare_text_features
 from .dit_config_validation import validate_dit_config, get_dit_config_summary
@@ -314,10 +315,130 @@ class DiTBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_head: int, dropout: float = 0.1,
                  use_adaptive_norm: bool = True, time_embed_dim: Optional[int] = None,
                  chunk_size: int = 512, use_flash_attention: bool = False,
-                 attention_dropout: float = 0.0, cross_attention_dropout: float = 0.0):
+                 attention_dropout: float = 0.0, cross_attention_dropout: float = 0.0,
+                 attn_topology: str = "pixart",
+                 mmdit_config: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.d_model = d_model
         self.use_adaptive_norm = use_adaptive_norm
+        self.inner_dim = num_heads * d_head
+        self.logger = logging.getLogger(__name__)
+
+        self.attn_topology = (attn_topology or "pixart").lower()
+        mmdit_cfg = mmdit_config or {}
+        if not isinstance(mmdit_cfg, dict):
+            mmdit_cfg = dict(mmdit_cfg)
+
+        self.mmdit_enabled = bool(mmdit_cfg.get("enable", False)) or self.attn_topology == "mmdit"
+        if self.mmdit_enabled and self.attn_topology != "mmdit":
+            self.attn_topology = "mmdit"
+        self.mmdit_text_as_sequence = bool(mmdit_cfg.get("text_as_sequence", False))
+
+        qkv_cfg = mmdit_cfg.get("qkv_modulation", {}) or {}
+        self.mmdit_enable_qkv_modulation = bool(qkv_cfg.get("enable", False))
+        raw_sources = qkv_cfg.get("sources", ["time"])
+        if isinstance(raw_sources, str):
+            raw_sources = [raw_sources]
+        self.mmdit_qkv_sources: List[str] = [str(src).lower() for src in raw_sources if src]
+        self.mmdit_qkv_hidden = int(qkv_cfg.get("hidden", d_model))
+        self.mmdit_modulators = nn.ModuleDict()
+        self.mmdit_active_sources: List[str] = []
+
+        pbs_cfg = mmdit_cfg.get("post_branch_scaling", {}) or {}
+        self.mmdit_post_branch_scaling = bool(pbs_cfg.get("enable", False))
+        self.mmdit_post_hidden = int(pbs_cfg.get("hidden", self.mmdit_qkv_hidden))
+        raw_post_sources = pbs_cfg.get("sources", self.mmdit_qkv_sources if self.mmdit_qkv_sources else ["time"])
+        if isinstance(raw_post_sources, str):
+            raw_post_sources = [raw_post_sources]
+        self.mmdit_post_scaling_sources: List[str] = [str(src).lower() for src in raw_post_sources if src]
+        self.mmdit_post_scalers = nn.ModuleDict()
+        self.mmdit_post_sources: List[str] = []
+        self.mmdit_post_param_chunks: int = 7  # grasp_scale, scene_scale, text_scale, grasp_shift, scene_shift, text_shift, post_scale
+
+        qk_rms_cfg = mmdit_cfg.get("qk_rmsnorm", {}) or {}
+        self.mmdit_qk_rmsnorm_enabled = bool(qk_rms_cfg.get("enable", False))
+
+        soft_cfg = mmdit_cfg.get("softclamp", {}) or {}
+        self.mmdit_softclamp_enabled = bool(soft_cfg.get("enable", False))
+        self.mmdit_softclamp_value = float(soft_cfg.get("value", 50.0)) if soft_cfg.get("value") is not None else 50.0
+        if self.mmdit_softclamp_value <= 0:
+            self.mmdit_softclamp_value = 50.0
+
+        if self.mmdit_post_branch_scaling and self.attn_topology != "mmdit":
+            self.logger.warning("Post-branch scaling is only available for MM-DiT topology. Disabling for this block.")
+            self.mmdit_post_branch_scaling = False
+
+        if self.mmdit_enable_qkv_modulation:
+            for source in self.mmdit_qkv_sources:
+                if source == "time":
+                    if time_embed_dim is None:
+                        self.logger.warning(
+                            "QKV modulation source 'time' requested but time_embed_dim is None; skipping time modulation."
+                        )
+                        continue
+                    input_dim = time_embed_dim
+                elif source in {"scene", "text"}:
+                    input_dim = d_model
+                else:
+                    self.logger.warning(
+                        f"Unsupported QKV modulation source '{source}'. Available sources: 'time', 'scene', 'text'."
+                    )
+                    continue
+
+                self.mmdit_modulators[source] = nn.Sequential(
+                    nn.Linear(input_dim, self.mmdit_qkv_hidden),
+                    nn.SiLU(),
+                    nn.Linear(self.mmdit_qkv_hidden, self.inner_dim * 6)
+                )
+                self.mmdit_active_sources.append(source)
+
+            if not self.mmdit_active_sources:
+                self.logger.warning("No valid QKV modulation sources configured; disabling modulation for this block.")
+                self.mmdit_enable_qkv_modulation = False
+
+        if self.mmdit_post_branch_scaling:
+            for source in self.mmdit_post_scaling_sources:
+                if source == "time":
+                    if time_embed_dim is None:
+                        self.logger.warning(
+                            "Post-branch scaling source 'time' requested but time_embed_dim is None; skipping time modulation."
+                        )
+                        continue
+                    input_dim = time_embed_dim
+                elif source in {"scene", "text"}:
+                    input_dim = d_model
+                else:
+                    self.logger.warning(
+                        f"Unsupported post-branch scaling source '{source}'. Available sources: 'time', 'scene', 'text'."
+                    )
+                    continue
+
+                self.mmdit_post_scalers[source] = nn.Sequential(
+                    nn.Linear(input_dim, self.mmdit_post_hidden),
+                    nn.SiLU(),
+                    nn.Linear(self.mmdit_post_hidden, self.d_model * self.mmdit_post_param_chunks)
+                )
+                self.mmdit_post_sources.append(source)
+
+            if not self.mmdit_post_sources:
+                self.logger.warning("No valid post-branch scaling sources configured; disabling for this block.")
+                self.mmdit_post_branch_scaling = False
+
+        if self.mmdit_enabled:
+            self.logger.info(
+                "DiTBlock initialized in MM-DiT mode | text_as_sequence=%s | qkv_modulation=%s | post_branch_scaling=%s | qk_rmsnorm=%s | softclamp=%s | sources=%s | post_sources=%s",
+                self.mmdit_text_as_sequence,
+                self.mmdit_enable_qkv_modulation,
+                self.mmdit_post_branch_scaling,
+                self.mmdit_qk_rmsnorm_enabled,
+                self.mmdit_softclamp_enabled,
+                self.mmdit_active_sources if self.mmdit_enable_qkv_modulation else [],
+                self.mmdit_post_sources if self.mmdit_post_branch_scaling else []
+            )
+        else:
+            self.logger.debug("DiTBlock initialized in PixArt topology")
+
+        self._mmdit_info_logged = False
         
         # Memory-efficient attention layers with dropout support
         self.self_attention = EfficientAttention(
@@ -332,6 +453,12 @@ class DiTBlock(nn.Module):
             d_model, num_heads, d_head, dropout, chunk_size, use_flash_attention,
             attention_dropout=cross_attention_dropout
         )
+
+        for attn_layer in (self.self_attention, self.scene_cross_attention, self.text_cross_attention):
+            attn_layer.enable_qk_rmsnorm = self.mmdit_qk_rmsnorm_enabled
+            attn_layer.enable_softclamp = self.mmdit_softclamp_enabled
+            attn_layer.softclamp_value = self.mmdit_softclamp_value
+            attn_layer._softclamp_warning_emitted = False
         
         # Feed-forward network
         self.feed_forward = FeedForward(d_model, dropout=dropout)
@@ -351,17 +478,29 @@ class DiTBlock(nn.Module):
     def forward(self, x: torch.Tensor, time_emb: Optional[torch.Tensor] = None,
                 scene_context: Optional[torch.Tensor] = None,
                 text_context: Optional[torch.Tensor] = None,
-                scene_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                scene_mask: Optional[torch.Tensor] = None,
+                text_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             x: (B, num_grasps, d_model)
             time_emb: (B, time_embed_dim) or None
             scene_context: (B, N_points, d_model) or None
-            text_context: (B, 1, d_model) or None
+            text_context: (B, seq_text, d_model) or None
             scene_mask: (B, N_points) or (B, 1, N_points) - mask for scene padding, 1=valid, 0=padding
+            text_mask: (B, seq_text) or (B, 1) optional mask for text tokens, 1=valid, 0=drop
         Returns:
             output: (B, num_grasps, d_model)
         """
+        if self.attn_topology == "mmdit":
+            return self._forward_mmdit(
+                x=x,
+                time_emb=time_emb,
+                scene_context=scene_context,
+                text_context=text_context,
+                scene_mask=scene_mask,
+                text_mask=text_mask,
+            )
+        
         # Self-attention among grasps
         if self.use_adaptive_norm and time_emb is not None:
             norm_x = self.norm1(x, time_emb)
@@ -444,6 +583,463 @@ class DiTBlock(nn.Module):
 
         return x
 
+    def _forward_mmdit(
+        self,
+        x: torch.Tensor,
+        time_emb: Optional[torch.Tensor],
+        scene_context: Optional[torch.Tensor],
+        text_context: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if self.use_adaptive_norm and time_emb is not None:
+            norm_x = self.norm1(x, time_emb)
+        else:
+            norm_x = self.norm1(x)
+
+        if torch.isnan(norm_x).any():
+            self.logger.error("[DiTBlock NaN] NaN after norm1 (MM-DiT)")
+            self.logger.error(
+                f"  Input x stats: min={x.min():.6f}, max={x.max():.6f}, mean={x.mean():.6f}"
+            )
+            if time_emb is not None:
+                self.logger.error(
+                    f"  time_emb stats: min={time_emb.min():.6f}, max={time_emb.max():.6f}, mean={time_emb.mean():.6f}"
+                )
+            raise RuntimeError("NaN detected in DiTBlock (MM-DiT) after norm1")
+
+        fused = self._fuse_modalities(norm_x, scene_context, text_context, scene_mask, text_mask)
+        tokens_all = fused["tokens"]
+        attn_mask = fused["attn_mask"]
+        lengths = fused["lengths"]
+
+        if torch.isnan(tokens_all).any():
+            self.logger.error("[DiTBlock NaN] NaN after modality fusion (MM-DiT)")
+            raise RuntimeError("NaN detected in DiTBlock (MM-DiT) after fusion")
+
+        if not self._mmdit_info_logged:
+            self.logger.info(
+                "[DiTBlock MM-DiT] segments grasp=%d scene=%d text=%d | post_branch_scaling=%s | qk_rmsnorm=%s | softclamp=%s",
+                lengths.get("grasp", 0),
+                lengths.get("scene", 0),
+                lengths.get("text", 0),
+                self.mmdit_post_branch_scaling,
+                self.mmdit_qk_rmsnorm_enabled,
+                self.mmdit_softclamp_enabled,
+            )
+            self._mmdit_info_logged = True
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            token_norm = tokens_all.detach().norm(dim=-1).mean().item() if tokens_all.numel() > 0 else 0.0
+            mask_sum = attn_mask.sum().item() if attn_mask is not None else lengths.get("total", 0)
+            self.logger.debug(
+                "[DiTBlock MM-DiT] tokens_all shape=%s attn_mask_shape=%s token_norm=%.6f mask_sum=%.2f",
+                tuple(tokens_all.shape),
+                tuple(attn_mask.shape) if attn_mask is not None else None,
+                token_norm,
+                mask_sum,
+            )
+
+        pbs_params: Optional[Dict[str, torch.Tensor]] = None
+        if self.mmdit_post_branch_scaling:
+            pbs_params = self._compute_post_branch_scaling(
+                time_emb=time_emb,
+                scene_tokens=fused["scene_tokens"],
+                text_tokens=fused["text_tokens"],
+                scene_mask=fused["scene_mask"],
+                text_mask=fused["text_mask"],
+            )
+            if pbs_params is not None:
+                tokens_all = self._apply_pre_branch_affine(
+                    tokens_all,
+                    lengths,
+                    pbs_params,
+                    fused["scene_mask"],
+                    fused["text_mask"],
+                    fused["combined_mask"],
+                )
+                if torch.isnan(tokens_all).any():
+                    self.logger.error("[DiTBlock NaN] NaN after post-branch scaling (MM-DiT)")
+                    raise RuntimeError("NaN detected in DiTBlock (MM-DiT) post-branch scaling")
+                if self.logger.isEnabledFor(logging.DEBUG):
+                    self.logger.debug("[DiTBlock MM-DiT] Applied pre-attention affine scaling")
+
+        attn_kwargs = self._compute_qkv_mod(
+            time_emb=time_emb,
+            scene_tokens=fused["scene_tokens"],
+            text_tokens=fused["text_tokens"],
+            scene_mask=fused["scene_mask"],
+            text_mask=fused["text_mask"],
+        )
+
+        if attn_kwargs and self.logger.isEnabledFor(logging.DEBUG):
+            stats = {k: v.detach().mean().item() for k, v in attn_kwargs.items()}
+            self.logger.debug("[DiTBlock MM-DiT] QKV modulation means %s", stats)
+
+        attn_out_all = self.self_attention(
+            tokens_all,
+            mask=attn_mask,
+            **attn_kwargs,
+        )
+
+        if torch.isnan(attn_out_all).any():
+            self.logger.error("[DiTBlock NaN] NaN after unified attention (MM-DiT)")
+            raise RuntimeError("NaN detected in DiTBlock (MM-DiT) attention")
+
+        grasp_len = lengths.get("grasp", 0)
+        if grasp_len > 0:
+            attn_out = attn_out_all[:, :grasp_len, :]
+            x = x + attn_out
+        else:
+            self.logger.warning("MM-DiT received zero grasp tokens; skipping residual update")
+
+        if pbs_params is not None and grasp_len > 0:
+            x = x * (1 + pbs_params["post_scale"].unsqueeze(1))
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(
+                    "[DiTBlock MM-DiT] Post-residual scaling mean=%.6f",
+                    pbs_params["post_scale"].detach().mean().item(),
+                )
+
+        if self.use_adaptive_norm and time_emb is not None:
+            norm_x = self.norm4(x, time_emb)
+        else:
+            norm_x = self.norm4(x)
+
+        if torch.isnan(norm_x).any():
+            self.logger.error("[DiTBlock NaN] NaN after norm4 (MM-DiT)")
+            raise RuntimeError("NaN detected in DiTBlock (MM-DiT) after norm4")
+
+        ff_out = self.feed_forward(norm_x)
+        if torch.isnan(ff_out).any():
+            self.logger.error("[DiTBlock NaN] NaN after feed_forward (MM-DiT)")
+            raise RuntimeError("NaN detected in DiTBlock (MM-DiT) feed_forward")
+
+        x = x + ff_out
+        return x
+
+    def _fuse_modalities(
+        self,
+        grasp_tokens: torch.Tensor,
+        scene_context: Optional[torch.Tensor],
+        text_context: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+    ) -> Dict[str, Any]:
+        batch_size, grasp_len, _ = grasp_tokens.shape
+        device = grasp_tokens.device
+        dtype = grasp_tokens.dtype
+
+        components: List[torch.Tensor] = [grasp_tokens]
+        lengths = {"grasp": grasp_len, "scene": 0, "text": 0}
+
+        processed_scene = None
+        if scene_context is not None:
+            processed_scene = scene_context.to(device=device, dtype=dtype)
+            lengths["scene"] = processed_scene.shape[1]
+
+        processed_text = None
+        if text_context is not None:
+            processed_text = text_context
+            if processed_text.dim() == 2:
+                processed_text = processed_text.unsqueeze(1)
+            processed_text = processed_text.to(device=device, dtype=dtype)
+            if not self.mmdit_text_as_sequence and processed_text.shape[1] > 1:
+                processed_text = processed_text.mean(dim=1, keepdim=True)
+            lengths["text"] = processed_text.shape[1]
+
+        scene_mask_norm = self._normalize_modal_mask(
+            scene_mask, lengths["scene"], batch_size, device, "scene_mask"
+        )
+        if processed_scene is None and scene_mask_norm is not None:
+            self.logger.warning("scene_mask provided without scene_context; ignoring scene mask")
+            scene_mask_norm = None
+
+        text_mask_norm = self._normalize_modal_mask(
+            text_mask, lengths["text"], batch_size, device, "text_mask"
+        )
+        if processed_text is None and text_mask_norm is not None:
+            self.logger.warning("text_mask provided without text_context; ignoring text mask")
+            text_mask_norm = None
+
+        if processed_scene is not None:
+            if scene_mask_norm is not None:
+                processed_scene = processed_scene * scene_mask_norm.unsqueeze(-1)
+            components.append(processed_scene)
+
+        if processed_text is not None:
+            if text_mask_norm is not None:
+                processed_text = processed_text * text_mask_norm.unsqueeze(-1)
+            components.append(processed_text)
+
+        tokens_all = torch.cat(components, dim=1)
+        lengths["total"] = tokens_all.shape[1]
+
+        combined_mask, attn_mask = build_attn_mask_all(
+            scene_mask_norm,
+            text_mask_norm,
+            lengths["grasp"],
+            lengths["scene"],
+            lengths["text"],
+            batch_size=batch_size,
+            device=device,
+            dtype=dtype,
+        )
+
+        if combined_mask is not None:
+            combined_mask = combined_mask.to(device=device, dtype=dtype)
+            tokens_all = tokens_all * combined_mask.unsqueeze(-1)
+
+        return {
+            "tokens": tokens_all,
+            "attn_mask": attn_mask,
+            "lengths": lengths,
+            "scene_tokens": processed_scene,
+            "text_tokens": processed_text,
+            "scene_mask": scene_mask_norm,
+            "text_mask": text_mask_norm,
+            "combined_mask": combined_mask,
+        }
+
+    def _normalize_modal_mask(
+        self,
+        mask: Optional[torch.Tensor],
+        target_length: int,
+        batch_size: int,
+        device: torch.device,
+        name: str,
+    ) -> Optional[torch.Tensor]:
+        if mask is None or target_length == 0:
+            return None
+        if not isinstance(mask, torch.Tensor):
+            self.logger.warning("%s is not a tensor, ignoring mask", name)
+            return None
+
+        mask = mask.to(device=device, dtype=torch.float32)
+        if mask.dim() == 1:
+            if mask.shape[0] != target_length:
+                self.logger.warning(
+                    "%s length %s does not match expected length %s", name, mask.shape[0], target_length
+                )
+                return None
+            mask = mask.view(1, -1).expand(batch_size, -1)
+        elif mask.dim() == 2:
+            if mask.shape[0] == batch_size and mask.shape[1] == target_length:
+                pass
+            elif mask.shape[0] == target_length and mask.shape[1] == 1:
+                mask = mask.view(1, target_length).expand(batch_size, -1)
+            elif mask.shape[0] == batch_size and mask.shape[1] == 1:
+                mask = mask.expand(batch_size, target_length)
+            else:
+                self.logger.warning(
+                    "%s shape %s incompatible with expected (%s, %s)",
+                    name,
+                    tuple(mask.shape),
+                    batch_size,
+                    target_length,
+                )
+                return None
+        elif mask.dim() == 3:
+            if mask.shape[-1] == target_length:
+                if mask.shape[1] == 1:
+                    mask = mask[:, 0, :]
+                else:
+                    mask = mask[:, :1, :].reshape(mask.shape[0], target_length)
+            elif mask.shape[1] == target_length and mask.shape[2] == 1:
+                mask = mask[:, :, 0]
+            else:
+                self.logger.warning(
+                    "%s shape %s incompatible with expected broadcast for length %s",
+                    name,
+                    tuple(mask.shape),
+                    target_length,
+                )
+                return None
+            if mask.shape[0] != batch_size:
+                mask = mask.expand(batch_size, -1)
+        else:
+            self.logger.warning("%s has unsupported rank %s", name, mask.dim())
+            return None
+
+        mask = torch.clamp(mask, 0.0, 1.0)
+        return mask
+
+    def _masked_mean(
+        self,
+        tokens: Optional[torch.Tensor],
+        mask: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        if tokens is None:
+            return None
+        if mask is None:
+            return tokens.mean(dim=1)
+
+        weights = mask.unsqueeze(-1).to(dtype=tokens.dtype)
+        weighted_sum = (tokens * weights).sum(dim=1)
+        denom = weights.sum(dim=1).clamp_min(1e-6)
+        return weighted_sum / denom
+
+    def _compute_qkv_mod(
+        self,
+        time_emb: Optional[torch.Tensor],
+        scene_tokens: Optional[torch.Tensor],
+        text_tokens: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        if not (self.mmdit_enable_qkv_modulation and self.mmdit_active_sources):
+            return {}
+
+        contributions = []
+        for source in self.mmdit_active_sources:
+            if source == "time":
+                if time_emb is None:
+                    continue
+                mod_in = time_emb
+            elif source == "scene":
+                mod_in = self._masked_mean(scene_tokens, scene_mask)
+                if mod_in is None:
+                    continue
+            elif source == "text":
+                mod_in = self._masked_mean(text_tokens, text_mask)
+                if mod_in is None:
+                    continue
+            else:
+                continue
+
+            contributions.append(self.mmdit_modulators[source](mod_in))
+
+        if not contributions:
+            return {}
+
+        modulation = torch.stack(contributions, dim=0).sum(dim=0)
+        if torch.isnan(modulation).any() or torch.isinf(modulation).any():
+            raise DiTConditioningError("Non-finite values encountered in QKV modulation")
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            mod_detached = modulation.detach()
+            self.logger.debug(
+                "[DiTBlock MM-DiT] QKV modulation stats | mean=%.6f std=%.6f max=%.6f",
+                mod_detached.mean().item(),
+                mod_detached.std(unbiased=False).item() if mod_detached.numel() > 1 else 0.0,
+                mod_detached.abs().max().item(),
+            )
+
+        q_scale, q_shift, k_scale, k_shift, v_scale, v_shift = modulation.chunk(6, dim=-1)
+        return {
+            "q_scale": q_scale,
+            "q_shift": q_shift,
+            "k_scale": k_scale,
+            "k_shift": k_shift,
+            "v_scale": v_scale,
+            "v_shift": v_shift,
+        }
+
+    def _compute_post_branch_scaling(
+        self,
+        time_emb: Optional[torch.Tensor],
+        scene_tokens: Optional[torch.Tensor],
+        text_tokens: Optional[torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        if not self.mmdit_post_branch_scaling or not self.mmdit_post_sources:
+            return None
+
+        contributions = []
+        for source in self.mmdit_post_sources:
+            if source == "time":
+                if time_emb is None:
+                    continue
+                mod_in = time_emb
+            elif source == "scene":
+                mod_in = self._masked_mean(scene_tokens, scene_mask)
+                if mod_in is None:
+                    continue
+            elif source == "text":
+                mod_in = self._masked_mean(text_tokens, text_mask)
+                if mod_in is None:
+                    continue
+            else:
+                continue
+
+            contributions.append(self.mmdit_post_scalers[source](mod_in))
+
+        if not contributions:
+            return None
+
+        params = torch.stack(contributions, dim=0).sum(dim=0)
+        if torch.isnan(params).any() or torch.isinf(params).any():
+            raise DiTConditioningError("Non-finite values encountered in post-branch scaling modulation")
+
+        params = params.view(params.shape[0], self.mmdit_post_param_chunks, self.d_model)
+        params = torch.tanh(params)
+
+        grasp_scale, scene_scale, text_scale, grasp_shift, scene_shift, text_shift, post_scale = params.unbind(dim=1)
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(
+                "[DiTBlock MM-DiT] Post-branch modulation stats | grasp_scale_mean=%.6f grasp_shift_mean=%.6f",
+                grasp_scale.detach().mean().item(),
+                grasp_shift.detach().mean().item(),
+            )
+
+        return {
+            "grasp_scale": grasp_scale,
+            "scene_scale": scene_scale,
+            "text_scale": text_scale,
+            "grasp_shift": grasp_shift,
+            "scene_shift": scene_shift,
+            "text_shift": text_shift,
+            "post_scale": post_scale,
+        }
+
+    def _apply_pre_branch_affine(
+        self,
+        tokens_all: torch.Tensor,
+        lengths: Dict[str, int],
+        params: Dict[str, torch.Tensor],
+        scene_mask: Optional[torch.Tensor],
+        text_mask: Optional[torch.Tensor],
+        combined_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        grasp_len = lengths.get("grasp", 0)
+        scene_len = lengths.get("scene", 0)
+        text_len = lengths.get("text", 0)
+
+        if grasp_len > 0:
+            tokens_all[:, :grasp_len, :] = (
+                tokens_all[:, :grasp_len, :] * (1 + params["grasp_scale"].unsqueeze(1))
+                + params["grasp_shift"].unsqueeze(1)
+            )
+
+        if scene_len > 0:
+            scene_start = grasp_len
+            scene_slice = slice(scene_start, scene_start + scene_len)
+            tokens_scene = (
+                tokens_all[:, scene_slice, :] * (1 + params["scene_scale"].unsqueeze(1))
+                + params["scene_shift"].unsqueeze(1)
+            )
+            if scene_mask is not None:
+                tokens_scene = tokens_scene * scene_mask.unsqueeze(-1)
+            tokens_all[:, scene_slice, :] = tokens_scene
+
+        if text_len > 0:
+            text_start = grasp_len + scene_len
+            text_slice = slice(text_start, text_start + text_len)
+            tokens_text = (
+                tokens_all[:, text_slice, :] * (1 + params["text_scale"].unsqueeze(1))
+                + params["text_shift"].unsqueeze(1)
+            )
+            if text_mask is not None:
+                tokens_text = tokens_text * text_mask.unsqueeze(-1)
+            tokens_all[:, text_slice, :] = tokens_text
+
+        if combined_mask is not None:
+            tokens_all = tokens_all * combined_mask.unsqueeze(-1)
+
+        return tokens_all
+
 
 class OutputProjection(nn.Module):
     """
@@ -513,6 +1109,17 @@ class DiTModel(nn.Module):
         self.use_object_mask = cfg.use_object_mask
         self.use_rgb = cfg.use_rgb
         
+        self.mmdit_config = getattr(cfg, 'mmdit', {})
+        if isinstance(self.mmdit_config, DictConfig):
+            self.mmdit_config = OmegaConf.to_container(self.mmdit_config, resolve=True)
+        elif not isinstance(self.mmdit_config, dict):
+            self.mmdit_config = dict(self.mmdit_config)
+        mmdit_enabled = bool(self.mmdit_config.get('enable', False))
+        self.attn_topology = getattr(cfg, 'attn_topology', None)
+        if self.attn_topology is None:
+            self.attn_topology = 'mmdit' if mmdit_enabled else 'pixart'
+        self.logger.info(f"DiT attention topology: {self.attn_topology}")
+        
         # Memory optimization config
         self.gradient_checkpointing = getattr(cfg, 'gradient_checkpointing', False)
         self.use_flash_attention = getattr(cfg, 'use_flash_attention', False)
@@ -570,7 +1177,9 @@ class DiTModel(nn.Module):
                 chunk_size=self.attention_chunk_size,
                 use_flash_attention=self.use_flash_attention,
                 attention_dropout=self.attention_dropout,
-                cross_attention_dropout=self.cross_attention_dropout
+                cross_attention_dropout=self.cross_attention_dropout,
+                attn_topology=self.attn_topology,
+                mmdit_config=self.mmdit_config,
             )
             
             # Wrap with gradient checkpointing if enabled
@@ -650,7 +1259,7 @@ class DiTModel(nn.Module):
         x_t, single_grasp_mode = self._normalize_input_shape(x_t)
         grasp_tokens = self._tokenize_grasps(x_t)
         time_emb = self._embed_timesteps(ts)
-        scene_context, text_context = self._resolve_condition_features(data, model_device)
+        scene_context, text_context, text_mask = self._resolve_condition_features(data, model_device)
         
         # Extract scene_mask if available
         scene_mask = data.get("scene_mask", None)
@@ -666,7 +1275,8 @@ class DiTModel(nn.Module):
             time_emb if self.use_adaptive_norm else None,
             scene_context,
             text_context,
-            scene_mask=scene_mask
+            scene_mask=scene_mask,
+            text_mask=text_mask,
         )
 
         output = self._finalize_output(x, single_grasp_mode)
@@ -734,7 +1344,7 @@ class DiTModel(nn.Module):
         self,
         data: Dict,
         model_device: torch.device
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         scene_context = data.get("scene_cond")
         if scene_context is not None:
             if not isinstance(scene_context, torch.Tensor):
@@ -745,6 +1355,7 @@ class DiTModel(nn.Module):
             self._assert_finite(scene_context, "scene_context")
 
         text_context = None
+        text_mask = None
         if self.use_text_condition:
             raw_text_context = data.get("text_cond")
             if raw_text_context is not None:
@@ -757,8 +1368,25 @@ class DiTModel(nn.Module):
                         raw_text_context = raw_text_context.to(model_device)
                         self.logger.debug(f"Moved text_cond to device {model_device}")
                     self._assert_finite(raw_text_context, "text_context")
-                    text_context = raw_text_context.unsqueeze(1)
-        return scene_context, text_context
+                    if raw_text_context.dim() == 2:
+                        text_context = raw_text_context.unsqueeze(1)
+                    else:
+                        text_context = raw_text_context
+
+            raw_text_mask = data.get("text_mask")
+            if raw_text_mask is not None:
+                if not isinstance(raw_text_mask, torch.Tensor):
+                    self.logger.warning(
+                        f"text_mask is not a tensor ({type(raw_text_mask)}), ignoring text mask"
+                    )
+                else:
+                    if raw_text_mask.device != model_device:
+                        raw_text_mask = raw_text_mask.to(model_device)
+                    if raw_text_mask.dim() == 1:
+                        raw_text_mask = raw_text_mask.unsqueeze(1)
+                    text_mask = raw_text_mask.to(dtype=torch.float32)
+
+        return scene_context, text_context, text_mask
 
     def _run_dit_blocks(
         self,
@@ -767,6 +1395,7 @@ class DiTModel(nn.Module):
         scene_context: Optional[torch.Tensor],
         text_context: Optional[torch.Tensor],
         scene_mask: Optional[torch.Tensor] = None,
+        text_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         x = tokens
         for idx, block in enumerate(self.dit_blocks):
@@ -781,7 +1410,8 @@ class DiTModel(nn.Module):
                     time_emb=time_emb,
                     scene_context=scene_context,
                     text_context=text_context,
-                    scene_mask=scene_mask
+                    scene_mask=scene_mask,
+                    text_mask=text_mask,
                 )
                 self._assert_finite(x, f"DiT block {idx} output")
             except DiTConditioningError:

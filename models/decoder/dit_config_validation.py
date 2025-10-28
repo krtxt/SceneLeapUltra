@@ -8,7 +8,7 @@ are properly set and compatible with the model requirements.
 import logging
 from typing import Any, Dict, List, Optional
 
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
 class DiTConfigValidationError(Exception):
@@ -67,6 +67,8 @@ def validate_dit_config(cfg: DictConfig) -> bool:
         if hasattr(cfg, 'backbone'):
             _validate_backbone_config(cfg.backbone)
 
+        _validate_mmdit_config(cfg)
+
         logging.info("DiT configuration validation passed")
         return True
 
@@ -101,6 +103,54 @@ def _validate_backbone_config(backbone_cfg: DictConfig) -> None:
         )
 
     validators[backbone_name](backbone_cfg)
+
+
+def _validate_boolean(value: Any, label: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, bool):
+        raise DiTConfigValidationError(f"{label} must be a boolean value")
+
+
+def _validate_mmdit_config(cfg: DictConfig) -> None:
+    if not hasattr(cfg, 'mmdit') or cfg.mmdit is None:
+        return
+
+    mmdit_cfg = cfg.mmdit
+    if isinstance(mmdit_cfg, DictConfig):
+        mmdit_dict = OmegaConf.to_container(mmdit_cfg, resolve=True)
+    elif isinstance(mmdit_cfg, dict):
+        mmdit_dict = mmdit_cfg
+    else:
+        mmdit_dict = dict(mmdit_cfg)
+
+    qkv_cfg = (mmdit_dict.get('qkv_modulation') or {})
+    _validate_boolean(qkv_cfg.get('enable'), 'mmdit.qkv_modulation.enable')
+    sources = qkv_cfg.get('sources', [])
+    if isinstance(sources, str):
+        sources = [sources]
+    valid_sources = {'time', 'scene', 'text'}
+    invalid_sources = [src for src in sources if src not in valid_sources]
+    if invalid_sources:
+        raise DiTConfigValidationError(
+            f"mmdit.qkv_modulation.sources contains invalid entries: {invalid_sources}. "
+            f"Valid options are {sorted(valid_sources)}"
+        )
+
+    post_cfg = (mmdit_dict.get('post_branch_scaling') or {})
+    _validate_boolean(post_cfg.get('enable'), 'mmdit.post_branch_scaling.enable')
+
+    qk_rms_cfg = (mmdit_dict.get('qk_rmsnorm') or {})
+    _validate_boolean(qk_rms_cfg.get('enable'), 'mmdit.qk_rmsnorm.enable')
+
+    soft_cfg = (mmdit_dict.get('softclamp') or {})
+    _validate_boolean(soft_cfg.get('enable'), 'mmdit.softclamp.enable')
+    if soft_cfg.get('enable'):
+        value = soft_cfg.get('value')
+        if value is None:
+            raise DiTConfigValidationError("mmdit.softclamp.value must be specified when enable=true")
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise DiTConfigValidationError("mmdit.softclamp.value must be a positive number")
 
 
 def validate_dit_compatibility_with_diffuser(dit_cfg: DictConfig, diffuser_cfg: DictConfig) -> bool:
@@ -181,6 +231,8 @@ def get_dit_config_summary(cfg: DictConfig) -> Dict[str, Any]:
             'use_rgb': cfg.use_rgb,
             'text_dropout_prob': cfg.text_dropout_prob
         },
+        'attention_topology': getattr(cfg, 'attn_topology', 'pixart'),
+        'mmdit_enabled': bool(getattr(getattr(cfg, 'mmdit', {}), 'enable', False)),
         'optimization': {
             'dropout': cfg.dropout,
             'attention_dropout': cfg.attention_dropout,
