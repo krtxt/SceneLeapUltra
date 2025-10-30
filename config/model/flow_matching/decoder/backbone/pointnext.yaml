@@ -1,0 +1,159 @@
+# PointNext 点云编码器配置
+# 基于 OpenPoints 的 PointNext 实现
+# 输入: (B, N, 3) 点云，输出: (B, K, d_model) tokens
+
+name: pointnext
+
+# ============= 基本参数 =============
+
+# 输入点数
+num_points: 8192
+
+# 输出 token 数量
+num_tokens: 128
+
+# 输出特征维度（与 DiT 对齐）
+out_dim: 512
+
+# ============= PointNext 架构参数 =============
+
+# 基础通道宽度
+# - 24: 与 PointNet2 参数量相近（≈ ~2M）
+# - 32: 标准（≈ ~3M）
+# - 64: 加强（≈ ~8M）
+# - 128: 重量级（≈ ~25M）
+width: 24
+
+# 每个阶段的 InvResMLP 块数量
+# - 5个阶段的层次结构
+# - 每个阶段包含 1 个块（轻量配置）
+# - 可以增加到 [1,2,2,2,1] 以获得更强的表达能力
+blocks: [1, 1, 1, 1, 1]
+
+# 每个阶段的下采样步长
+# - stride=1: 不下采样
+# - stride=2/4: 下采样 2x/4x
+# - 当前配置: 1 * 2 * 2 * 4 * 4 = 64x
+# - 对于 8192 输入点 → 8192/64 = 128 tokens ✓
+strides: [1, 2, 2, 4, 4]
+
+# ============= 局部聚合参数 =============
+
+# 使用残差连接
+use_res: true
+
+# Ball query 半径（米为单位）
+# - 越大 → 更大的感受野，但可能过度平滑
+# - 越小 → 更精细的局部特征，但可能欠拟合
+# 推荐: 0.1 - 0.2
+radius: 0.1
+
+# Ball query 中每个中心点的邻居数量
+# - 越多 → 更稳定，但计算更慢
+# - 越少 → 更快，但可能不稳定
+# 推荐: 16 - 64
+nsample: 32
+
+# Set Abstraction 层数
+sa_layers: 1
+
+# SA 层是否使用残差连接（仅对 PointNeXt-S 设为 true）
+sa_use_res: false
+
+# InvResMLP 块的扩展比例
+expansion: 4
+
+# ============= 输入/输出配置 =============
+
+# 输入特征维度（PointNeXt 实际接收的通道数）
+# - 说明：当 use_xyz=true（默认）时，前向会将归一化后的 xyz 与额外特征拼接后送入编码器，
+#   因此 input_feature_dim 必须等于 3 + 额外特征通道数
+# - use_rgb/use_object_mask 组合对应取值（use_xyz=true）：
+#   00（都关）→ 3
+#   10（仅 RGB）→ 6 (= 3 + 3)
+#   01（仅 Mask）→ 4 (= 3 + 1)
+#   11（RGB+Mask）→ 7 (= 3 + 3 + 1)
+# - 若设置 use_xyz=false（不推荐），则 input_feature_dim 等于“额外特征通道数”本身：
+#   00→0，10→3，01→1，11→4（同时需确保前向不再拼接 xyz）
+input_feature_dim: 3
+
+# 是否使用 xyz 作为特征
+use_xyz: true
+
+# 是否归一化 xyz 坐标
+normalize_xyz: true
+
+# 是否使用 FPS 采样提取 tokens
+# - true: 使用 Farthest Point Sampling（空间均匀，推荐）
+# - false: 使用步长采样（更快，但可能不均匀）
+use_fps: true
+
+# ============= 预设配置 =============
+
+# 预设1: 轻量级（快速原型）
+# width: 32
+# blocks: [1, 1, 1, 1, 1]
+# num_tokens: 128
+# out_dim: 256
+# → 参数量: ~2M, 速度: ~50ms/sample
+
+# 预设2: 标准（平衡）
+# width: 32
+# blocks: [1, 1, 1, 1, 1]
+# num_tokens: 128
+# out_dim: 512
+# → 参数量: ~3M, 速度: ~60ms/sample
+
+# 预设3: 增强（更强表达）
+# width: 64
+# blocks: [1, 2, 2, 2, 1]
+# num_tokens: 256
+# out_dim: 512
+# → 参数量: ~8M, 速度: ~150ms/sample
+
+# 预设4: 重量级（最佳性能）
+# width: 128
+# blocks: [2, 2, 3, 3, 2]
+# num_tokens: 512
+# out_dim: 768
+# → 参数量: ~25M, 速度: ~500ms/sample
+
+# ============= 与其他 Backbone 对比 =============
+
+# PointNet2:
+#   - 更简单的架构
+#   - 参数量: ~2M
+#   - 速度: ~30ms/sample
+#   - 性能: 基线
+
+# PTv3:
+#   - Transformer 架构，强大的全局建模
+#   - 参数量: ~10M
+#   - 速度: ~200ms/sample
+#   - 性能: 最佳（但更慢）
+
+# PointNext:
+#   - 平衡性能和效率
+#   - 参数量: ~2M（当前默认 width=24；若 width=32 约 ~3M）
+#   - 速度: ~60ms/sample
+#   - 性能: 介于 PointNet2 和 PTv3 之间
+
+# ============= 预期性能 =============
+# 输入: 8192 点 (xyz only)
+# 配置: width=32, blocks=[1,1,1,1,1], num_tokens=128, out_dim=512
+#
+# 预期输出:
+#   - xyz: (B, 128, 3) - 128个采样的点坐标
+#   - features: (B, 512, 128) - 每个点的512维特征
+#
+# 性能指标:
+#   - 推理时间: ~60ms/sample (单 GPU)
+#   - 显存占用: ~100MB (batch_size=1)
+#   - 参数量: ~3M
+#   - FLOPs: ~2G
+#
+# 兼容性:
+#   - ✓ 与 PointNet2 接口兼容
+#   - ✓ 与 PTv3 接口兼容
+#   - ✓ 可直接替换在 DiT decoder 中使用
+

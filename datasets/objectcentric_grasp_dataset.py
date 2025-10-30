@@ -9,7 +9,7 @@ from .utils.data_processing_utils import load_objectcentric_hand_pose_data
 from .utils.grasp_sampling_utils import (generate_exhaustive_chunks,
                                          sample_grasps_from_available,
                                          sample_indices_from_available)
-from .utils.io_utils import load_object_mesh
+from .utils.io_utils import load_object_mesh_with_textures
 from .utils.pointcloud_utils import (create_table_plane,
                                      sample_points_from_mesh_separated)
 from .utils.transform_utils import (apply_object_pose_to_vertices,
@@ -253,7 +253,7 @@ class ObjectCentricGraspDataset(Dataset):
         grasp_indices = item.get("grasp_indices")
 
         try:
-            obj_verts_omf, obj_faces = load_object_mesh(
+            obj_verts_omf, obj_faces, obj_textures = load_object_mesh_with_textures(
                 self.obj_root_dir, object_code, self.mesh_scale
             )
             if obj_verts_omf is None or obj_faces is None:
@@ -295,6 +295,9 @@ class ObjectCentricGraspDataset(Dataset):
                 table_faces,
                 self.max_points,
                 self.object_sampling_ratio,
+                obj_textures=obj_textures,
+                return_rgb=True,
+                table_rgb=(0.6, 0.6, 0.6),
             )
 
             positions = hand_pose_centered[:, :3]
@@ -331,7 +334,7 @@ class ObjectCentricGraspDataset(Dataset):
     ) -> Dict[str, Any]:
         """统一的错误返回结构。"""
         return {
-            "scene_pc": torch.zeros((self.max_points, 3), dtype=torch.float32),
+            "scene_pc": torch.zeros((self.max_points, 6), dtype=torch.float32),
             "hand_model_pose": torch.zeros((self.num_grasps, 23), dtype=torch.float32),
             "se3": torch.zeros((self.num_grasps, 4, 4), dtype=torch.float32),
             "obj_verts": torch.zeros((0, 3), dtype=torch.float32),

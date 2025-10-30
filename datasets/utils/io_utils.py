@@ -7,11 +7,16 @@ used by the SceneLeapPro dataset classes.
 
 import os
 from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 import cv2
 import torch
 from pytorch3d.io import load_obj
+try:
+    # TexturesUV 用于为 PyTorch3D Meshes 附着纹理
+    from pytorch3d.renderer import TexturesUV  # type: ignore
+except Exception:  # 兜底：运行环境可能不含渲染模块
+    TexturesUV = None  # type: ignore
 
 
 @lru_cache(maxsize=None)
@@ -97,6 +102,82 @@ def load_object_mesh(
         return verts, faces.verts_idx
     except Exception as e:
         return None, None
+
+
+@lru_cache(maxsize=None)
+def load_object_mesh_with_textures(
+    obj_root_dir: str, object_code: str, mesh_scale: float
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[Any]]:
+    """
+    加载物体 mesh（含纹理信息，若可用）。
+
+    返回:
+        - verts: (V,3) 经过 `mesh_scale` 缩放后的顶点
+        - faces: (F,3) 面索引
+        - textures: 可直接传入 PyTorch3D `Meshes(textures=...)` 的 `TexturesUV`，若不可用则为 None
+
+    注意:
+        - 纹理坐标与贴图与顶点的刚体/缩放变换无关，因此外部可安全地在返回的 verts 上做位姿/居中等操作。
+    """
+    mesh_path = os.path.join(obj_root_dir, object_code, "mesh", "simplified.obj")
+    if not os.path.exists(mesh_path):
+        return None, None, None
+
+    try:
+        verts, faces, aux = load_obj(mesh_path, load_textures=True)
+        verts = verts * mesh_scale
+
+        faces_idx = faces.verts_idx
+        textures = None
+
+        # 当渲染模块可用且OBJ内含有纹理坐标与贴图时，构造 TexturesUV
+        if TexturesUV is not None and hasattr(faces, "textures_idx") and getattr(faces, "textures_idx") is not None:
+            faces_uvs = faces.textures_idx
+            verts_uvs = getattr(aux, "verts_uvs", None)
+            tex_images = getattr(aux, "texture_images", None)
+
+            if verts_uvs is not None and tex_images:
+                # 纹理贴图字段在不同版本 PyTorch3D 中可能是 dict 或 list，做鲁棒处理
+                if isinstance(tex_images, dict):
+                    first_img = next(iter(tex_images.values()))
+                elif isinstance(tex_images, (list, tuple)) and len(tex_images) > 0:
+                    first_img = tex_images[0]
+                else:
+                    first_img = None
+
+                if first_img is not None:
+                    # 统一转为 torch.Tensor，范围一般为[0,1]
+                    if not torch.is_tensor(first_img):
+                        import numpy as np  # 局部导入，避免不必要依赖
+                        if hasattr(first_img, "numpy"):
+                            first_img = torch.from_numpy(first_img.numpy())
+                        elif isinstance(first_img, np.ndarray):
+                            first_img = torch.from_numpy(first_img)
+                        else:
+                            # 无法识别的对象，放弃纹理
+                            first_img = None
+
+                    if first_img is not None:
+                        # 统一到 [0,1] 范围，并添加 batch 维度
+                        maps = first_img.to(torch.float32)
+                        if maps.max() > 1.0:
+                            maps = maps / 255.0
+                        maps = maps.unsqueeze(0)
+                        textures = TexturesUV(
+                            maps=maps,
+                            faces_uvs=[faces_uvs],
+                            verts_uvs=[verts_uvs],
+                        )
+
+        return verts, faces_idx, textures
+    except Exception:
+        # 回退到无纹理加载
+        try:
+            verts, faces, _ = load_obj(mesh_path, load_textures=False)
+            verts = verts * mesh_scale
+            return verts, faces.verts_idx, None
+        except Exception:
+            return None, None, None
 
 
 def validate_file_paths(*paths: str) -> bool:

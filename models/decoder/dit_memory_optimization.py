@@ -19,23 +19,26 @@ from contextlib import contextmanager
 import gc
 import math
 
-# Try to import PyTorch 2.x SDPA (Scaled Dot-Product Attention)
-# This is the recommended approach for PyTorch 2.0+
+# 控制注意力路径日志的全局开关
+_SDPA_LOG_LIMIT = 2  # 仅输出前两条 INFO 日志
+_sdpa_log_state = {"count": 0, "suppressed_logged": False}
+
+# Try to detect PyTorch 2.x SDPA (Scaled Dot-Product Attention)
+# Prefer runtime probing to avoid hard-coded assumptions
 _SDPA_AVAILABLE = False
 try:
-    # Check if scaled_dot_product_attention is available
     if hasattr(F, 'scaled_dot_product_attention'):
-        # Test if it works (some PyTorch builds may have it but not working)
-        _test_q = torch.randn(1, 1, 1, 8)
-        _test_k = torch.randn(1, 1, 1, 8)
-        _test_v = torch.randn(1, 1, 1, 8)
-        _ = F.scaled_dot_product_attention(_test_q, _test_k, _test_v, dropout_p=0.0)
+        with torch.no_grad():
+            _test_q = torch.randn(1, 1, 1, 8)
+            _test_k = torch.randn(1, 1, 1, 8)
+            _test_v = torch.randn(1, 1, 1, 8)
+            _ = F.scaled_dot_product_attention(_test_q, _test_k, _test_v, dropout_p=0.0)
         _SDPA_AVAILABLE = True
-        logging.info("PyTorch 2.x SDPA (scaled_dot_product_attention) is available and will be used")
+        logging.info("PyTorch SDPA available and will be preferred when applicable")
     else:
-        logging.warning("PyTorch 2.x SDPA not available. Using fallback attention implementation.")
+        logging.warning("PyTorch SDPA symbol not found; using fallback attention implementations")
 except Exception as e:
-    logging.warning(f"PyTorch 2.x SDPA test failed: {e}. Using fallback attention implementation.")
+    logging.warning(f"PyTorch SDPA probing failed: {e}. Will use fallback attention implementations")
     _SDPA_AVAILABLE = False
 
 
@@ -140,10 +143,13 @@ class EfficientAttention(nn.Module):
     - Mask support for handling padding
     """
     
+    _global_backend_logged = False
+
     def __init__(self, d_model: int, num_heads: int, d_head: int, 
                  dropout: float = 0.1, chunk_size: int = 512,
                  use_flash_attention: bool = False, 
-                 attention_dropout: float = 0.0):
+                 attention_dropout: float = 0.0,
+                 enable_safety_checks: bool = False):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -153,6 +159,7 @@ class EfficientAttention(nn.Module):
         self.chunk_size = chunk_size
         self.use_flash_attention = use_flash_attention
         self.attention_dropout = attention_dropout
+        self.enable_safety_checks = enable_safety_checks
         
         # Check if SDPA is available
         self.use_sdpa = _SDPA_AVAILABLE
@@ -179,9 +186,27 @@ class EfficientAttention(nn.Module):
                 logging.info("Flash Attention 2 loaded as fallback (SDPA not available)")
             except ImportError:
                 logging.warning("Flash attention not available, using standard attention")
+
+        # Log once globally which backend is selected and key params
+        logger = logging.getLogger(__name__)
+        if not EfficientAttention._global_backend_logged:
+            backend = (
+                "SDPA" if self.use_sdpa else ("FlashAttention2" if self.flash_attn_func is not None else "Standard/Chunked")
+            )
+            logger.info(
+                f"EfficientAttention backend selected: {backend} "
+                f"(sdpa={self.use_sdpa}, flash_attn={'yes' if self.flash_attn_func is not None else 'no'}, "
+                f"chunk_size={self.chunk_size}, heads={self.num_heads}, head_dim={self.d_head}, "
+                f"attn_dropout={self.attention_dropout})"
+            )
+            EfficientAttention._global_backend_logged = True
+
+        # Per-instance: log first actual path on first forward only
+        self._has_logged_path = False
     
     def forward(self, query: torch.Tensor, key: Optional[torch.Tensor] = None, 
-                value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                value: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None,
+                attention_bias: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Memory-efficient attention forward pass.
         
@@ -191,6 +216,8 @@ class EfficientAttention(nn.Module):
             value: (B, seq_len_v, d_model) or None
             mask: Optional attention mask (1=valid, 0=padding)
                   Shape: (B, seq_len_k) or (B, seq_len_q, seq_len_k)
+            attention_bias: Optional attention bias to add to scores
+                  Shape: (B, num_heads, seq_len_q, seq_len_k)
             
         Returns:
             output: (B, seq_len_q, d_model)
@@ -203,21 +230,65 @@ class EfficientAttention(nn.Module):
         B, seq_len_q, _ = query.shape
         seq_len_k = key.shape[1]
         
-        # Priority 1: Use PyTorch 2.x SDPA (recommended)
+        # If attention_bias is provided, we need to use standard attention
+        # because SDPA and Flash Attention don't support additive bias directly
+        if attention_bias is not None:
+            if not self._has_logged_path:
+                logging.getLogger(__name__).info(
+                    f"EfficientAttention path: standard (with geometric bias) "
+                    f"(B={B}, Lq={seq_len_q}, Lk={seq_len_k}, mask={'yes' if mask is not None else 'no'})"
+                )
+                self._has_logged_path = True
+            return self._standard_attention_forward(query, key, value, mask, attention_bias)
+        
+        # Decide used path and log it once per instance
         if self.use_sdpa:
+            used_path = "sdpa"
+        elif (self.flash_attn_func is not None and seq_len_q > 128 and seq_len_k > 128 and mask is None):
+            used_path = "flash_attn"
+        elif (seq_len_q > self.chunk_size or seq_len_k > self.chunk_size):
+            used_path = "chunked"
+        else:
+            used_path = "standard"
+
+        if not self._has_logged_path:
+            # Best-effort log of SDPA kernel toggles if available
+            kernel_flags = {}
+            try:
+                kernel_flags = {
+                    'flash': torch.backends.cuda.flash_sdp_enabled() if hasattr(torch.backends.cuda, 'flash_sdp_enabled') else None,
+                    'mem_efficient': torch.backends.cuda.mem_efficient_sdp_enabled() if hasattr(torch.backends.cuda, 'mem_efficient_sdp_enabled') else None,
+                    'math': torch.backends.cuda.math_sdp_enabled() if hasattr(torch.backends.cuda, 'math_sdp_enabled') else None,
+                }
+            except Exception:
+                kernel_flags = {}
+
+            global _sdpa_log_state
+            logger = logging.getLogger(__name__)
+            if _sdpa_log_state["count"] < _SDPA_LOG_LIMIT:
+                logger.info(
+                    f"EfficientAttention path: {used_path} (B={B}, Lq={seq_len_q}, Lk={seq_len_k}, "
+                    f"mask={'yes' if mask is not None else 'no'}, sdpa_flags={kernel_flags})"
+                )
+                _sdpa_log_state["count"] += 1
+                if _sdpa_log_state["count"] == _SDPA_LOG_LIMIT:
+                    logger.info(
+                        "EfficientAttention path: 后续同类日志已抑制，如需完整信息请将日志级别调到 DEBUG。"
+                    )
+            elif not _sdpa_log_state["suppressed_logged"]:
+                logger.debug(
+                    f"EfficientAttention path [suppressed]: {used_path} "
+                    f"(B={B}, Lq={seq_len_q}, Lk={seq_len_k}, mask={'yes' if mask is not None else 'no'})"
+                )
+                _sdpa_log_state["suppressed_logged"] = True
+            self._has_logged_path = True
+
+        if used_path == "sdpa":
             return self._sdpa_attention_forward(query, key, value, mask)
-        
-        # Priority 2: Use flash attention if available and sequences are long enough
-        if (self.flash_attn_func is not None and 
-            seq_len_q > 128 and seq_len_k > 128 and 
-            mask is None):  # Flash attention doesn't support custom masks easily
+        if used_path == "flash_attn":
             return self._flash_attention_forward(query, key, value)
-        
-        # Priority 3: Use chunked attention for very long sequences
-        if seq_len_q > self.chunk_size or seq_len_k > self.chunk_size:
+        if used_path == "chunked":
             return self._chunked_attention_forward(query, key, value, mask)
-        
-        # Fallback: Standard attention for smaller sequences
         return self._standard_attention_forward(query, key, value, mask)
     
     def _sdpa_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
@@ -276,6 +347,13 @@ class EfficientAttention(nn.Module):
         
         # Reshape back to (B, seq_len, d_model)
         out = out.contiguous().view(out.shape[0], out.shape[1], self.inner_dim)
+
+        # Safety: fallback if SDPA produced non-finite values
+        if self.enable_safety_checks and not torch.isfinite(out).all():
+            logging.getLogger(__name__).warning(
+                "SDPA produced non-finite output; falling back to standard attention"
+            )
+            return self._standard_attention_forward(query, key, value, mask)
         
         return self.to_out(out)
     
@@ -323,8 +401,8 @@ class EfficientAttention(nn.Module):
             end_i = min(i + self.chunk_size, seq_len_q)
             q_chunk = q[:, :, i:end_i, :]  # (B, num_heads, chunk_size, d_head)
             
-            # Compute attention scores for this chunk
-            scores = torch.einsum('bhid,bhjd->bhij', q_chunk, k) * self.scale
+            # Compute attention scores for this chunk using matmul
+            scores = torch.matmul(q_chunk, k.transpose(-1, -2)) * self.scale
             
             if mask is not None:
                 # Handle different mask shapes
@@ -340,24 +418,36 @@ class EfficientAttention(nn.Module):
                 scores = scores.masked_fill(mask_chunk == 0, -float('inf'))
             
             attn = torch.softmax(scores, dim=-1)
+            # Replace non-finite probabilities (e.g., all-masked rows) with zeros
+            if self.enable_safety_checks and not torch.isfinite(attn).all():
+                attn = torch.where(torch.isfinite(attn), attn, torch.zeros_like(attn))
             
             # Apply attention dropout (only during training)
             if self.attn_dropout is not None:
                 attn = self.attn_dropout(attn)
             
             # Apply attention to values
-            out_chunk = torch.einsum('bhij,bhjd->bhid', attn, v)
+            out_chunk = torch.matmul(attn, v)
             output_chunks.append(out_chunk)
         
         # Concatenate chunks
         out = torch.cat(output_chunks, dim=2)  # (B, num_heads, seq_len_q, d_head)
         out = out.transpose(1, 2).contiguous().view(B, seq_len_q, self.inner_dim)
+        # Final safety on output
+        if self.enable_safety_checks and not torch.isfinite(out).all():
+            out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
         
         return self.to_out(out)
     
     def _standard_attention_forward(self, query: torch.Tensor, key: torch.Tensor, 
-                                   value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Standard attention implementation with dropout support."""
+                                   value: torch.Tensor, mask: Optional[torch.Tensor] = None,
+                                   attention_bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Standard attention implementation with dropout and bias support.
+        
+        Args:
+            attention_bias: Optional (B, num_heads, seq_len_q, seq_len_k)
+        """
         from einops import rearrange
         
         B, seq_len_q, _ = query.shape
@@ -371,8 +461,13 @@ class EfficientAttention(nn.Module):
         k = rearrange(k, 'b n (h d) -> b h n d', h=self.num_heads)
         v = rearrange(v, 'b n (h d) -> b h n d', h=self.num_heads)
         
-        # Compute attention scores
-        scores = torch.einsum('bhid,bhjd->bhij', q, k) * self.scale
+        # Compute attention scores (b, h, n, d) @ (b, h, d, n)
+        scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        
+        # Add geometric attention bias if provided
+        if attention_bias is not None:
+            # attention_bias shape: (B, num_heads, seq_len_q, seq_len_k)
+            scores = scores + attention_bias
         
         if mask is not None:
             # Handle different mask shapes
@@ -386,14 +481,25 @@ class EfficientAttention(nn.Module):
             scores = scores.masked_fill(mask == 0, -float('inf'))
         
         attn = torch.softmax(scores, dim=-1)
+        # Safety: handle non-finite attention (e.g., all -inf rows)
+        if self.enable_safety_checks and not torch.isfinite(attn).all():
+            # Replace NaN/Inf with zeros
+            attn = torch.where(torch.isfinite(attn), attn, torch.zeros_like(attn))
+            # If mask exists and a query has all keys masked, zero that row explicitly
+            if mask is not None:
+                all_masked = (mask == 0).all(dim=-1, keepdim=True)  # (B, 1, Lq, 1)
+                attn = attn.masked_fill(all_masked, 0.0)
         
         # Apply attention dropout (only during training)
         if self.attn_dropout is not None:
             attn = self.attn_dropout(attn)
         
         # Apply attention to values
-        out = torch.einsum('bhij,bhjd->bhid', attn, v)
+        out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
+        # Final safety on output
+        if self.enable_safety_checks and not torch.isfinite(out).all():
+            out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
         
         return self.to_out(out)
 
@@ -444,6 +550,7 @@ class BatchProcessor:
         logger: Optional[logging.Logger] = None,
         default_d_model: int = 512,
         default_num_layers: int = 12,
+        default_dtype: torch.dtype = torch.float32,
     ):
         self.max_batch_size = max_batch_size
         self.max_sequence_length = max_sequence_length
@@ -451,9 +558,11 @@ class BatchProcessor:
         self.memory_monitor = MemoryMonitor(logger)
         self.default_d_model = default_d_model
         self.default_num_layers = default_num_layers
+        self.default_dtype = default_dtype
     
     def estimate_memory_usage(self, batch_size: int, sequence_length: int, 
-                            d_model: int, num_layers: int) -> float:
+                            d_model: int, num_layers: int,
+                            dtype: torch.dtype = torch.float32) -> float:
         """
         Estimate memory usage for given batch configuration.
         
@@ -463,14 +572,20 @@ class BatchProcessor:
         # Rough estimation based on transformer memory patterns
         # This is a simplified model - actual usage may vary
         
+        # Determine bytes per element by dtype
+        try:
+            bytes_per_elem = torch.tensor([], dtype=dtype).element_size()
+        except Exception:
+            bytes_per_elem = 4  # sensible default
+
         # Input embeddings
-        input_memory = batch_size * sequence_length * d_model * 4  # 4 bytes per float32
+        input_memory = batch_size * sequence_length * d_model * bytes_per_elem
         
         # Attention matrices (Q, K, V for each layer)
-        attention_memory = num_layers * batch_size * sequence_length * sequence_length * 4
+        attention_memory = num_layers * batch_size * sequence_length * sequence_length * bytes_per_elem
         
         # Feed-forward layers (assuming 4x expansion)
-        ff_memory = num_layers * batch_size * sequence_length * d_model * 4 * 4
+        ff_memory = num_layers * batch_size * sequence_length * d_model * bytes_per_elem * 4
         
         # Gradients (roughly 2x the forward pass)
         total_forward = input_memory + attention_memory + ff_memory
@@ -480,7 +595,8 @@ class BatchProcessor:
     
     def suggest_batch_configuration(self, target_batch_size: int, 
                                   sequence_length: int, d_model: int, 
-                                  num_layers: int) -> Dict[str, Any]:
+                                  num_layers: int,
+                                  dtype: Optional[torch.dtype] = None) -> Dict[str, Any]:
         """
         Suggest optimal batch configuration based on memory constraints.
         """
@@ -492,8 +608,9 @@ class BatchProcessor:
             available_memory = 8.0  # Assume 8GB for CPU
         
         # Estimate memory for target configuration
+        used_dtype = dtype or self.default_dtype
         estimated_memory = self.estimate_memory_usage(
-            target_batch_size, sequence_length, d_model, num_layers
+            target_batch_size, sequence_length, d_model, num_layers, used_dtype
         )
         
         suggestions = {
@@ -620,7 +737,8 @@ class BatchProcessor:
             len(batch),
             max_seq_len,
             self.default_d_model,
-            self.default_num_layers
+            self.default_num_layers,
+            self.default_dtype
         )
 
     @staticmethod
@@ -636,11 +754,18 @@ def optimize_memory_usage():
     """
     Apply global memory optimizations.
     """
-    # Enable memory efficient attention if available
+    # Configure SDPA kernel toggles (best-effort, version compatible)
     try:
-        torch.backends.cuda.enable_flash_sdp(True)
-    except AttributeError:
-        pass
+        # PyTorch >= 2.1 unified API
+        torch.backends.cuda.sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True)
+    except Exception:
+        # Fallback to legacy APIs if present (PyTorch 2.0)
+        try:
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            torch.backends.cuda.enable_math_sdp(True)
+        except Exception:
+            pass
     
     # Set memory fraction for CUDA
     if torch.cuda.is_available():

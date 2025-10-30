@@ -443,6 +443,56 @@ def _remove_outliers_statistical_numpy(
     return inlier_mask
 
 
+def generate_geometric_colors(points: torch.Tensor, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    """
+    为没有纹理的物体基于几何位置生成伪颜色
+    
+    Args:
+        points: 点坐标 (N, 3)
+        dtype: 数据类型
+        device: 设备
+        
+    Returns:
+        colors: RGB颜色 (N, 3)，范围[0,1]
+    """
+    if points.shape[0] == 0:
+        return torch.zeros((0, 3), dtype=dtype, device=device)
+    
+    # 基于高度(Z坐标)生成颜色渐变
+    z_coords = points[:, 2]
+    z_min, z_max = z_coords.min(), z_coords.max()
+    
+    if z_max - z_min > 1e-6:
+        # 归一化高度到[0,1]
+        z_norm = (z_coords - z_min) / (z_max - z_min)
+    else:
+        z_norm = torch.ones_like(z_coords) * 0.5
+    
+    # 创建从蓝色(底部)到红色(顶部)的渐变
+    colors = torch.zeros((points.shape[0], 3), dtype=dtype, device=device)
+    colors[:, 0] = z_norm  # R通道：高度越高越红
+    colors[:, 1] = 0.3 + 0.4 * (1 - torch.abs(z_norm - 0.5) * 2)  # G通道：中间偏绿
+    colors[:, 2] = 1 - z_norm  # B通道：高度越低越蓝
+    
+    # 添加一些基于XY位置的变化
+    x_coords = points[:, 0]
+    y_coords = points[:, 1]
+    
+    # 基于距离中心的距离调整饱和度
+    center_x, center_y = x_coords.mean(), y_coords.mean()
+    dist_from_center = torch.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
+    if dist_from_center.max() > 1e-6:
+        dist_norm = dist_from_center / dist_from_center.max()
+        # 中心区域更亮，边缘稍暗
+        brightness = 0.6 + 0.4 * (1 - dist_norm)
+        colors = colors * brightness.unsqueeze(1)
+    
+    # 确保颜色在[0,1]范围内
+    colors = torch.clamp(colors, 0.0, 1.0)
+    
+    return colors
+
+
 def create_table_plane(
     table_size: float, device: torch.device, dtype: torch.dtype, table_z: float = 0.0
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -487,6 +537,10 @@ def sample_points_from_mesh_separated(
     table_faces: torch.Tensor,
     max_points: int,
     object_sampling_ratio: float,
+    *,
+    obj_textures: Optional[object] = None,
+    return_rgb: bool = False,
+    table_rgb: Tuple[float, float, float] = (0.75, 0.75, 0.75),
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Sample points from object and table meshes separately and merge them.
@@ -500,9 +554,10 @@ def sample_points_from_mesh_separated(
         object_sampling_ratio: Ratio of points dedicated to the object mesh
 
     Returns:
-        Tuple of:
-            Sampled points (max_points, 3)
-            Object mask indicating points sampled from the object mesh (max_points,)
+        - 若 return_rgb=False: (points_xyz, object_mask)
+            points_xyz: (max_points, 3)
+        - 若 return_rgb=True: (points_xyzrgb, object_mask)
+            points_xyzrgb: (max_points, 6) 其中 rgb∈[0,1]
     """
     if max_points <= 0:
         empty_points = torch.zeros(
@@ -524,21 +579,55 @@ def sample_points_from_mesh_separated(
 
         sampled_chunks: List[torch.Tensor] = []
         mask_chunks: List[torch.Tensor] = []
+        color_chunks: List[torch.Tensor] = []
 
         if num_obj_points > 0:
             if obj_verts.numel() > 0 and obj_faces.numel() > 0:
-                obj_mesh = Meshes(verts=[obj_verts], faces=[obj_faces])
-                obj_points = sample_points_from_meshes(
-                    obj_mesh, num_samples=num_obj_points
-                ).squeeze(0)
+                if return_rgb and obj_textures is not None:
+                    # 确保纹理与几何在同一设备
+                    try:
+                        textures = obj_textures
+                        if hasattr(textures, "to"):
+                            textures = textures.to(obj_verts.device)
+                        obj_mesh = Meshes(verts=[obj_verts], faces=[obj_faces], textures=textures)
+                        out = sample_points_from_meshes(
+                            obj_mesh, num_samples=num_obj_points, return_normals=False, return_textures=True
+                        )
+                        # 兼容不同返回形态
+                        if isinstance(out, (list, tuple)):
+                            obj_points = out[0].squeeze(0)
+                            obj_colors = out[-1].squeeze(0)
+                        else:
+                            obj_points = out.squeeze(0)
+                            obj_colors = generate_geometric_colors(obj_points, dtype, device)
+                    except Exception:
+                        # 回退为纯几何采样
+                        obj_mesh = Meshes(verts=[obj_verts], faces=[obj_faces])
+                        obj_points = sample_points_from_meshes(
+                            obj_mesh, num_samples=num_obj_points
+                        ).squeeze(0)
+                        obj_colors = generate_geometric_colors(obj_points, dtype, device)
+                else:
+                    obj_mesh = Meshes(verts=[obj_verts], faces=[obj_faces])
+                    obj_points = sample_points_from_meshes(
+                        obj_mesh, num_samples=num_obj_points
+                    ).squeeze(0)
+                    if return_rgb:
+                        # 为没有纹理的物体生成基于几何的伪颜色
+                        obj_colors = generate_geometric_colors(obj_points, dtype, device)
             else:
                 obj_points = torch.zeros(
                     (num_obj_points, 3), dtype=dtype, device=device
                 )
+                if return_rgb:
+                    # 为零点生成随机颜色以便调试
+                    obj_colors = torch.rand((num_obj_points, 3), dtype=dtype, device=device) * 0.5 + 0.3
             sampled_chunks.append(obj_points)
             mask_chunks.append(
                 torch.ones((obj_points.shape[0],), dtype=torch.bool, device=device)
             )
+            if return_rgb:
+                color_chunks.append(obj_colors)
 
         if num_table_points > 0:
             if table_verts.numel() > 0 and table_faces.numel() > 0:
@@ -554,9 +643,15 @@ def sample_points_from_mesh_separated(
             mask_chunks.append(
                 torch.zeros((table_points.shape[0],), dtype=torch.bool, device=device)
             )
+            if return_rgb:
+                tbl_rgb = torch.tensor(table_rgb, dtype=dtype, device=device).view(1, 3)
+                color_chunks.append(tbl_rgb.repeat(table_points.shape[0], 1))
 
         if not sampled_chunks:
-            zero_points = torch.zeros((max_points, 3), dtype=dtype, device=device)
+            if return_rgb:
+                zero_points = torch.zeros((max_points, 6), dtype=dtype, device=device)
+            else:
+                zero_points = torch.zeros((max_points, 3), dtype=dtype, device=device)
             zero_mask = torch.zeros((max_points,), dtype=torch.bool, device=device)
             return zero_points, zero_mask
 
@@ -569,13 +664,21 @@ def sample_points_from_mesh_separated(
             )
         )
 
+        if return_rgb:
+            combined_colors = torch.cat(color_chunks, dim=0) if color_chunks else torch.zeros((combined_points.shape[0], 3), dtype=dtype, device=device)
+
         if combined_points.shape[0] != max_points:
-            padding = torch.zeros(
-                (max_points - combined_points.shape[0], 3), dtype=dtype, device=device
-            )
-            combined_points = torch.cat([combined_points, padding], dim=0)
+            pad_n = max_points - combined_points.shape[0]
+            if return_rgb:
+                padding = torch.zeros((pad_n, 3), dtype=dtype, device=device)
+                combined_colors = torch.cat([combined_colors, padding], dim=0)
+                padding_pts = torch.zeros((pad_n, 3), dtype=dtype, device=device)
+                combined_points = torch.cat([combined_points, padding_pts], dim=0)
+            else:
+                padding_pts = torch.zeros((pad_n, 3), dtype=dtype, device=device)
+                combined_points = torch.cat([combined_points, padding_pts], dim=0)
             mask_padding = torch.zeros(
-                (padding.shape[0],), dtype=torch.bool, device=device
+                (pad_n,), dtype=torch.bool, device=device
             )
             combined_mask = torch.cat([combined_mask, mask_padding], dim=0)
 
@@ -583,6 +686,11 @@ def sample_points_from_mesh_separated(
             perm = torch.randperm(combined_points.shape[0], device=device)
             combined_points = combined_points[perm]
             combined_mask = combined_mask[perm]
+            if return_rgb:
+                combined_colors = combined_colors[perm]
+
+        if return_rgb:
+            combined_points = torch.cat([combined_points, combined_colors], dim=1)
 
         return combined_points, combined_mask
 

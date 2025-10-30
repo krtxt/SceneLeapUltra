@@ -113,8 +113,8 @@ def main(cfg) -> None:
             logger.warning("Unable to get git commit hash")
 
         # Backup repository snapshot
-        # logging.info("Backing up source tree...")
-        # backup_code(save_dir)
+        logging.info("Backing up source tree...")
+        backup_code(save_dir)
 
         # Save active configuration
         config_dir = save_dir / "config"

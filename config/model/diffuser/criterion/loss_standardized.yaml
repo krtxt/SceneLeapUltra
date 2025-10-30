@@ -31,12 +31,6 @@ standardized_validation_loss:
   aggregation:
     strategy: "mean"
     ignore_invalid_grasps: true
-  
-  quality_metrics:
-    include_penetration_penalty: false
-    include_contact_quality: false
-    penetration_weight: 1.0
-    contact_weight: 0.5
 
 use_negative_prompts: ${use_negative_prompts}
 
@@ -50,6 +44,81 @@ cost_weights:
   translation: 2.0
   rotation: 2.0
   qpos: 1.0
+
+
+# # 线性升温（简单直接）
+# set_loss:
+#   schedule:
+#     type: linear
+#     start_weight: 0.0
+#     final_weight: 0.5
+# # 二次升温（更晚更强）
+# set_loss:
+#   schedule:
+#     type: quadratic
+#     start_weight: 0.0
+#     final_weight: 0.6
+# # 余弦降权（仅小 t 强，随 t 逐步减弱）
+# set_loss:
+#   schedule:
+#     type: cosine
+#     start_weight: 0.6
+#     final_weight: 0.0
+
+# set_loss:
+#   enable: true
+#   schedule:
+#     type: none
+#     final_weight: 0.001
+# # 建议默认：余弦升温（后期更强，平滑）次保守
+set_loss:
+  enable: false
+  schedule:
+    type: cosine
+    start_weight: 0.0
+    final_weight: 0.001
+  weights:
+    cd: 1.0
+    ot: 0.1
+    repulsion: 0.0
+  ot:
+    eps: 0.05
+    tau: 0.5
+    iters: 50
+    subsample: 256
+  repulsion:
+    k: 4
+    s: 2.0
+    delta: 1.0e-3
+  cost_weights:
+    translation: 2.0
+    rotation: 2.0
+    qpos: 0.1
+
+set_metrics:
+  enable: false
+  cov_threshold: 0.2
+  strict_cov_threshold: 0.1
+  max_samples: 64 # 每个batch测试的抓取上限
+  cost_weights:
+    translation: 2.0
+    rotation: 2.0
+    qpos: 0.1
+  log: # 是否开启metric计算
+    cov: true
+    mmd: true
+    nnd: true
+    component_stats: false
+
+quality_metrics:
+  enable: false
+  metrics:
+    penetration_penalty:
+      enable: false
+      weight: 1.0
+    contact_quality:
+      enable: false
+      weight: 0.5
 
 scale: 0.1
 

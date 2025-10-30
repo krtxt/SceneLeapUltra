@@ -4,11 +4,13 @@ Implements text feature extraction based on CLIP, supporting encoding of positiv
 """
 
 import logging
-from typing import List, Union
+from typing import Dict, List, Union
 
 import open_clip
 import torch
 import torch.nn as nn
+
+from open_clip.model import text_global_pool
 
 
 class TextEncoder(nn.Module):
@@ -46,26 +48,77 @@ class TextEncoder(nn.Module):
             self.clip_model = self.clip_model.to(self.device)
             logging.warning(f"Fallback to ViT-B-32 with openai weights on {self.device}")
     
-    def forward(self, texts: Union[str, List[str]]) -> torch.Tensor:
+    def forward(self, texts: Union[str, List[str]]) -> Dict[str, torch.Tensor]:
         """
-        Encode text to 512-dimensional feature vectors
+        编码文本，返回token序列和池化向量。
+
         Args:
-            texts: String or list of strings
+            texts: 单个字符串或字符串列表
+
         Returns:
-            text_features: Text features of shape (batch_size, 512)
+            字典，包含：
+                - sequence: (B, L_text, d_model)
+                - pooled: (B, d_model)
+                - attention_mask: (B, L_text) 取值{0,1}
         """
         if isinstance(texts, str):
             texts = [texts]
-        
+
+        batch_size = len(texts)
+
         try:
             tokens = self.tokenizer(texts).to(self.device)
-            with torch.no_grad():  # No gradient needed for text encoding
-                text_features = self.clip_model.encode_text(tokens)
-            return text_features.float()
+            return self._encode(tokens)
         except Exception as e:
             logging.error(f"Text encoding failed: {e}")
-            # Return zero vector as fallback
-            return torch.zeros(len(texts), 512, device=self.device)
+            sequence_len = getattr(self.clip_model, 'context_length', None)
+            if sequence_len is None:
+                sequence_len = self.clip_model.positional_embedding.shape[0]
+            hidden_dim = self.clip_model.transformer.width
+            pooled_dim = hidden_dim
+            if getattr(self.clip_model, 'text_projection', None) is not None:
+                projection = self.clip_model.text_projection
+                if isinstance(projection, nn.Linear):
+                    pooled_dim = projection.out_features
+                else:
+                    pooled_dim = projection.shape[1]
+
+            sequence = torch.zeros(batch_size, sequence_len, hidden_dim, device=self.device)
+            pooled = torch.zeros(batch_size, pooled_dim, device=self.device)
+            attention_mask = torch.zeros(batch_size, sequence_len, device=self.device)
+            return {
+                'sequence': sequence,
+                'pooled': pooled,
+                'attention_mask': attention_mask,
+            }
+
+    def _encode(self, tokens: torch.LongTensor) -> Dict[str, torch.Tensor]:
+        with torch.no_grad():
+            cast_dtype = self.clip_model.transformer.get_cast_dtype()
+            x = self.clip_model.token_embedding(tokens).to(cast_dtype)
+            x = x + self.clip_model.positional_embedding.to(cast_dtype)
+            x = self.clip_model.transformer(x, attn_mask=self.clip_model.attn_mask)
+            x = self.clip_model.ln_final(x)
+
+            sequence = x.float()
+
+            pooled = text_global_pool(sequence, tokens, self.clip_model.text_pool_type)
+            projection = getattr(self.clip_model, 'text_projection', None)
+            if projection is not None:
+                if isinstance(projection, nn.Linear):
+                    pooled = projection(pooled)
+                else:
+                    pooled = pooled @ projection
+
+            pooled = pooled.float()
+
+        attention_mask = (tokens != 0).float()
+
+        return {
+            'sequence': sequence,
+            'pooled': pooled,
+            'attention_mask': attention_mask,
+        }
 
 
 class PosNegTextEncoder(nn.Module):
@@ -78,6 +131,26 @@ class PosNegTextEncoder(nn.Module):
         self.device = torch.device(device) if isinstance(device, str) else device
         self.text_encoder = TextEncoder(device=self.device, model_name=model_name, pretrained=pretrained)
 
+    def _empty_negative_outputs(self, batch_size: int, num_neg: int) -> Dict[str, torch.Tensor]:
+        hidden_dim = self.text_encoder.clip_model.transformer.width
+        seq_len = getattr(self.text_encoder.clip_model, 'context_length', None)
+        if seq_len is None:
+            seq_len = self.text_encoder.clip_model.positional_embedding.shape[0]
+
+        pooled_dim = hidden_dim
+        projection = getattr(self.text_encoder.clip_model, 'text_projection', None)
+        if projection is not None:
+            if isinstance(projection, nn.Linear):
+                pooled_dim = projection.out_features
+            else:
+                pooled_dim = projection.shape[1]
+
+        return {
+            'pooled': torch.zeros(batch_size, num_neg, pooled_dim, device=self.device),
+            'sequence': torch.zeros(batch_size, num_neg, seq_len, hidden_dim, device=self.device),
+            'attention_mask': torch.zeros(batch_size, num_neg, seq_len, device=self.device),
+        }
+
     def to(self, device):
         """Override to() method to ensure internal text_encoder also moves to correct device"""
         self.device = torch.device(device) if isinstance(device, str) else device
@@ -87,17 +160,21 @@ class PosNegTextEncoder(nn.Module):
             self.text_encoder.device = self.device
         return result
         
-    def encode_positive(self, texts: List[str]) -> torch.Tensor:
+    def encode_positive(self, texts: List[str]) -> Dict[str, torch.Tensor]:
         """
         Encode positive prompts
         Args:
             texts: List of positive prompts, length equals batch_size
         Returns:
-            pos_embeddings: Positive prompt embeddings of shape (batch_size, 512)
+            dict: {
+                'sequence': (B, L_text, d_model),
+                'pooled': (B, d_model),
+                'attention_mask': (B, L_text)
+            }
         """
         return self.text_encoder(texts)
     
-    def encode_negative(self, texts: List[List[str]]) -> torch.Tensor:
+    def encode_negative(self, texts: List[List[str]]) -> Dict[str, torch.Tensor]:
         """
         Encode negative prompts
         Args:
@@ -107,8 +184,7 @@ class PosNegTextEncoder(nn.Module):
             neg_embeddings: Negative prompt embeddings of shape (batch_size, num_neg_prompts, 512)
         """
         if not texts or not texts[0]:
-            # If no negative prompts, return zero vector
-            return torch.zeros(len(texts), 1, 512, device=self.device)
+            return self._empty_negative_outputs(len(texts), 1)
 
         B = len(texts)  # Batch size
         # logging.info(f"Encoding negative prompts - batch size: {B}, input texts structure: {[len(x) for x in texts]}")
@@ -116,7 +192,7 @@ class PosNegTextEncoder(nn.Module):
         # Find maximum number of negative prompts for uniform padding
         max_neg_prompts = max(len(sample_neg_prompts) for sample_neg_prompts in texts)
         if max_neg_prompts == 0:
-            return torch.zeros(B, 1, 512, device=self.device)
+            return self._empty_negative_outputs(len(texts), 1)
 
         # Normalize number of negative prompts for all samples
         normalized_texts = []
@@ -140,13 +216,16 @@ class PosNegTextEncoder(nn.Module):
             all_neg_prompts.extend(sample_neg_prompts)
 
         # Batch encode all negative prompts
-        embeddings = self.text_encoder(all_neg_prompts)   # (B * max_neg_prompts, 512)
+        outputs = self.text_encoder(all_neg_prompts)
+        pooled = outputs['pooled'].reshape(B, max_neg_prompts, outputs['pooled'].shape[-1])
+        sequence = outputs['sequence'].reshape(B, max_neg_prompts, outputs['sequence'].shape[-2], outputs['sequence'].shape[-1])
+        attention_mask = outputs['attention_mask'].reshape(B, max_neg_prompts, outputs['attention_mask'].shape[-1])
 
-        # Reshape to (B, max_neg_prompts, 512) - preserve semantic relationships
-        # logging.info(f"Encoded negative prompts: {embeddings.shape}")
-        embeddings = embeddings.reshape(B, max_neg_prompts, embeddings.shape[-1])
-        # logging.info(f"Reshaped negative prompts: {embeddings.shape}")
-        return embeddings
+        return {
+            'pooled': pooled,
+            'sequence': sequence,
+            'attention_mask': attention_mask,
+        }
     
     def forward(self, texts: Union[List[str], List[List[str]]], type: str) -> torch.Tensor:
         """

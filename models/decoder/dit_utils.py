@@ -1,8 +1,39 @@
 import copy
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
+
+class RMSNorm(torch.nn.Module):
+    """Root Mean Square Layer Normalization (参考 Hunyuan3D-DiT)"""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: Tensor):
+        x_dtype = x.dtype
+        x = x.float()
+        rrms = torch.rsqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + 1e-6)
+        return (x * rrms).to(dtype=x_dtype) * self.scale
+
+
+class QKNorm(torch.nn.Module):
+    """
+    Query-Key Normalization (参考 Hunyuan3D-DiT)
+    
+    对 Q 和 K 分别进行 RMS 归一化，提高训练稳定性。
+    """
+    def __init__(self, dim: int):
+        super().__init__()
+        self.query_norm = RMSNorm(dim)
+        self.key_norm = RMSNorm(dim)
+
+    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
+        q = self.query_norm(q)
+        k = self.key_norm(k)
+        return q.to(v), k.to(v)
 
 
 def init_weights(module: nn.Module) -> None:

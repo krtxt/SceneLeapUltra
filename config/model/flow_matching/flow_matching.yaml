@@ -27,6 +27,51 @@ fm:
   # Stochastic Flow Matching (SFM) - for ablation
   sfm:
     sigma: 0.0  # Set > 0 to enable stochastic bridges
+  
+  # Optimal Transport Matching (集合到集合的最优配对)
+  # 理论背景：对于无序集合数据（如1024个抓取），使用Sinkhorn算法
+  # 计算最优传输配对，最小化总传输距离，让速度场更平滑、更易学习
+  optimal_transport:
+    enable: false  # 是否启用OT配对（默认关闭，可通过命令行覆盖）
+
+    # Sinkhorn算法参数
+    reg: 0.05  # 熵正则化参数（0.05-0.2）
+              # 越小越接近真实OT（但收敛慢），越大收敛快（但略欠精确）
+    num_iters: 50  # Sinkhorn迭代次数（50-100通常足够）
+
+    # 距离度量
+    distance_metric: euclidean  # euclidean | squared | weighted
+                                # euclidean: L2距离
+                                # squared: L2距离的平方（更强调远距离）
+                                # weighted: 对pose不同组件加权（仅需配置component_weights，
+                                #          切片按全局常量自动确定）
+
+    # 组件加权配置（仅当distance_metric=weighted时使用）
+    # 切片默认使用全局常量（utils/hand_model.py 中的 TRANSLATION_SLICE/QPOS_SLICE/ROTATION_SLICE），无需在配置中指定
+    component_weights:
+      translation: 1.0   # 平移权重（3D，单位：米）
+      qpos: 0.0          # 关节角度权重（16维，单位：弧度）
+      rotation: 2.0      # 旋转权重（6D rot6d 或其他表示）
+
+    # 配对提取策略
+    matching_strategy: greedy  # greedy | hungarian
+                               # greedy: 快速，每行取最大值
+                               # hungarian: 精确但需要scipy，慢
+
+    # 数值稳定性
+    normalize_cost: true  # 是否归一化代价矩阵到[0,1]
+
+    # 训练策略
+    start_epoch: 0  # 从第几个epoch开始使用OT（0=立即启用）
+                    # 建议：可以先训练几个epoch稳定后再启用
+
+    # 日志频率
+    log_freq: 100  # 每多少个batch记录一次详细的OT统计信息
+
+    # 混合耦合（Hybrid Coupling）控制：在OT噪声中注入部分独立噪声
+    hybrid_coupling:
+      enable: true      # 是否启用混合耦合（需在optimal_transport.enable为true时生效）
+      beta: 0.2          # 噪声混合系数 β∈[0,1]，越大越接近独立耦合
 
 # ODE Solver configuration
 solver:
@@ -84,7 +129,7 @@ optimizer:
 # Scheduler configuration
 scheduler:
   name: cosine           # <-- 关键改动：使用余弦退火
-  t_max: 1000            # <-- 设为总 epoch 数
+  t_max: 500            # <-- 设为总 epoch 数
   min_lr: 1.0e-6         # <-- 衰减到的最低学习率
   step_size: null
   step_gamma: null
@@ -126,4 +171,3 @@ wandb_optimization:
   log_gradients: false
   gradient_freq: 1000
   system_freq: 500
-

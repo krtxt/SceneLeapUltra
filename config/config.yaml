@@ -10,7 +10,7 @@ defaults:
 
 epochs: 500
 resume: false
-save_root: &save_root ./experiments/fmm_objcentric_mini_pointnet2_moreepochs_retry_ditfinetune
+save_root: &save_root ./experiments/ptv3sparseFPS_mmdit_debug
 save_top_n: 5
 seed: 42
 rot_type: &rot_type r6d
@@ -29,14 +29,14 @@ checkpoint_path: ???
 trainer:
   max_epochs: ${epochs}
   accelerator: auto
-  devices: auto
+  devices: 1
   strategy: auto
   precision: 32
   check_val_every_n_epoch: 5
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   benchmark: true
-  log_every_n_steps: 20
+  log_every_n_steps: 5
   sync_batchnorm: false
   find_unused_parameters: true
 

@@ -292,7 +292,13 @@ class UNetModel(nn.Module):
         scene_feat = scene_feat.permute(0, 2, 1).contiguous()  # (B, N, C)
         scene_feat = self.scene_projection(scene_feat)  # Project to d_model if needed
 
-        condition_dict = {"scene_cond": scene_feat, "text_cond": None, "text_mask": None}
+        condition_dict = {
+            "scene_cond": scene_feat,
+            "text_cond": None,
+            "text_mask": None,
+            "text_tokens": None,
+            "text_token_mask": None,
+        }
         if self.use_negative_prompts:
             condition_dict.update({"neg_pred": None, "neg_text_features": None})
 
@@ -305,21 +311,38 @@ class UNetModel(nn.Module):
             b = scene_feat.shape[0]
 
             # Encode positive and negative prompts
-            pos_text_features = self.text_encoder.encode_positive(data['positive_prompt'])
-            neg_text_features = self.text_encoder.encode_negative(data['negative_prompts']) if self.use_negative_prompts and 'negative_prompts' in data else None
+            pos_text_outputs = self.text_encoder.encode_positive(data['positive_prompt'])
+            pos_text_sequence = pos_text_outputs['sequence']
+            pos_text_pooled = pos_text_outputs['pooled']
+            pos_token_mask = pos_text_outputs['attention_mask']
+            neg_text_features = None
+            neg_text_tokens = None
+            neg_token_mask = None
+            if self.use_negative_prompts and 'negative_prompts' in data:
+                neg_outputs = self.text_encoder.encode_negative(data['negative_prompts'])
+                neg_text_features = neg_outputs['pooled']
+                neg_text_tokens = neg_outputs['sequence']
+                neg_token_mask = neg_outputs['attention_mask']
 
             # Apply text dropout during training
-            text_mask = torch.bernoulli(torch.full((b, 1), 1.0 - self.text_dropout_prob, device=pos_text_features.device)) if self.training else torch.ones(b, 1, device=pos_text_features.device)
+            text_mask = torch.bernoulli(torch.full((b, 1), 1.0 - self.text_dropout_prob, device=pos_text_pooled.device)) if self.training else torch.ones(b, 1, device=pos_text_pooled.device)
             
             # Process text features
             scene_embedding = torch.mean(scene_feat, dim=1)
-            pos_text_features_out, neg_pred = self.text_processor(pos_text_features, neg_text_features, scene_embedding)
+            pos_text_features_out, neg_pred = self.text_processor(pos_text_pooled, neg_text_features, scene_embedding)
 
-            condition_dict.update({"text_cond": pos_text_features_out * text_mask, "text_mask": text_mask})
+            condition_dict.update({
+                "text_cond": pos_text_features_out * text_mask,
+                "text_mask": text_mask,
+                "text_tokens": pos_text_sequence * text_mask.unsqueeze(-1),
+                "text_token_mask": pos_token_mask * text_mask,
+            })
             if self.use_negative_prompts:
                 condition_dict.update({
-                    "neg_pred": neg_pred,  # Predicted negative prompt for CFG
-                    "neg_text_features": neg_text_features, # Original negative features for loss
+                    "neg_pred": neg_pred,
+                    "neg_text_features": neg_text_features,
+                    "neg_text_tokens": neg_text_tokens,
+                    "neg_text_token_mask": neg_token_mask,
                 })
 
         except Exception as e:

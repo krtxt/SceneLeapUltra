@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scene Token 策略对比 - SceneLeapUltra</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 40px;
+            font-size: 1.2em;
+        }
+        
+        .task-overview {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 40px;
+        }
+        
+        .task-overview h2 {
+            margin-bottom: 15px;
+        }
+        
+        .task-specs {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .spec-item {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .spec-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            opacity: 0.9;
+        }
+        
+        .spec-value {
+            font-size: 1.1em;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .strategies-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+        
+        .strategy-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 15px;
+            padding: 25px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+        
+        .strategy-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            border-color: #667eea;
+        }
+        
+        .strategy-card.recommended {
+            border-color: #4CAF50;
+            background: linear-gradient(135deg, #f0fff4 0%, #e8f5e9 100%);
+        }
+        
+        .strategy-card.new {
+            border-color: #FF9800;
+            background: linear-gradient(135deg, #fff8e1 0%, #ffe0b2 100%);
+        }
+        
+        .strategy-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .strategy-title {
+            font-size: 1.4em;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .badge.recommended {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .badge.new {
+            background: #FF9800;
+            color: white;
+        }
+        
+        .badge.existing {
+            background: #9E9E9E;
+            color: white;
+        }
+        
+        .strategy-description {
+            color: #666;
+            margin-bottom: 15px;
+            font-size: 0.95em;
+        }
+        
+        .pros-cons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .pros, .cons {
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        
+        .pros {
+            background: #e8f5e9;
+            border-left: 4px solid #4CAF50;
+        }
+        
+        .cons {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+        }
+        
+        .pros-title, .cons-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        
+        .pros-title {
+            color: #2e7d32;
+        }
+        
+        .cons-title {
+            color: #c62828;
+        }
+        
+        .metrics {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .metric {
+            text-align: center;
+            flex: 1;
+            min-width: 100px;
+        }
+        
+        .metric-label {
+            font-size: 0.8em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .metric-value {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        .stars {
+            color: #FFC107;
+        }
+        
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 30px 0;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .comparison-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: bold;
+        }
+        
+        .comparison-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .comparison-table tr:hover {
+            background: #f5f5f5;
+        }
+        
+        .comparison-table tr.highlight {
+            background: #f0fff4;
+        }
+        
+        .recommendation-box {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 40px 0;
+        }
+        
+        .recommendation-box h2 {
+            margin-bottom: 20px;
+            font-size: 2em;
+        }
+        
+        .recommendation-item {
+            background: rgba(255,255,255,0.15);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .recommendation-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        code {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .architecture-diagram {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 30px 0;
+            text-align: center;
+        }
+        
+        .diagram-box {
+            display: inline-block;
+            padding: 20px 30px;
+            margin: 10px;
+            border-radius: 10px;
+            font-weight: bold;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+        }
+        
+        .diagram-box.grasp {
+            background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%);
+            color: white;
+        }
+        
+        .diagram-box.scene {
+            background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+            color: white;
+        }
+        
+        .diagram-arrow {
+            display: inline-block;
+            font-size: 2em;
+            margin: 0 20px;
+            color: #666;
+        }
+        
+        .implementation-box {
+            background: #f9f9f9;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 40px 0;
+        }
+        
+        .implementation-box h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+        
+        .implementation-box h3 {
+            color: #667eea;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .implementation-box ul {
+            margin-left: 25px;
+        }
+        
+        .implementation-box code {
+            background: rgba(102, 126, 234, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Scene Token 策略对比分析</h1>
+        <p class="subtitle">针对 SceneLeapUltra 抓取生成任务的点云编码器优化方案</p>
+        
+        <!-- 任务概览 -->
+        <div class="task-overview">
+            <h2>📋 任务背景</h2>
+            <div class="task-specs">
+                <div class="spec-item">
+                    <div class="spec-label">输入格式</div>
+                    <div class="spec-value">(B, N, 3) 点云</div>
+                    <div style="margin-top: 5px; font-size: 0.9em;">N = 8192 个点</div>
+                </div>
+                <div class="spec-item">
+                    <div class="spec-label">输出格式</div>
+                    <div class="spec-value">(B, K, D) tokens</div>
+                    <div style="margin-top: 5px; font-size: 0.9em;">K = 128, D = 512</div>
+                </div>
+                <div class="spec-item">
+                    <div class="spec-label">压缩比</div>
+                    <div class="spec-value">64:1</div>
+                    <div style="margin-top: 5px; font-size: 0.9em;">8192 → 128 tokens</div>
+                </div>
+                <div class="spec-item">
+                    <div class="spec-label">应用场景</div>
+                    <div class="spec-value">抓取生成</div>
+                    <div style="margin-top: 5px; font-size: 0.9em;">DiT条件输入</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 架构示意图 -->
+        <div class="architecture-diagram">
+            <h2 style="margin-bottom: 20px;">🏗️ Double Stream 架构</h2>
+            <div>
+                <div class="diagram-box grasp">Grasp Tokens<br/>(M, 512)</div>
+                <span class="diagram-arrow">←→</span>
+                <div class="diagram-box scene">Scene Tokens<br/>(128, 512)</div>
+            </div>
+            <p style="margin-top: 20px; color: #666;">通过 16 个 Double Stream Blocks + 32 个 Single Stream Blocks 进行交互</p>
+        </div>
+        
+        <!-- 现有方案 -->
+        <h2 style="margin-top: 40px; margin-bottom: 20px;">📚 现有方案（ptv3_sparse_encoder.py）</h2>
+        <div class="strategies-grid">
+            <!-- 方案① -->
+            <div class="strategy-card">
+                <div class="strategy-header">
+                    <div class="strategy-title">① last_layer</div>
+                    <span class="badge existing">现有</span>
+                </div>
+                <div class="strategy-description">
+                    直接使用PTv3最后一层的稀疏特征，必要时使用FPS调整数量
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>实现简单</li>
+                            <li>速度快</li>
+                            <li>直接利用PTv3特征</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>可能丢失几何细节</li>
+                            <li>依赖配置参数</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #4CAF50;">否</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案② -->
+            <div class="strategy-card">
+                <div class="strategy-header">
+                    <div class="strategy-title">② fps</div>
+                    <span class="badge existing">现有</span>
+                </div>
+                <div class="strategy-description">
+                    最远点采样（Farthest Point Sampling），保证空间分布均匀
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>空间分布均匀</li>
+                            <li>覆盖率好</li>
+                            <li>算法稳定</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>不考虑任务相关性</li>
+                            <li>忽略几何特征</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #4CAF50;">否</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案③ -->
+            <div class="strategy-card">
+                <div class="strategy-header">
+                    <div class="strategy-title">③ grid</div>
+                    <span class="badge existing">现有</span>
+                </div>
+                <div class="strategy-description">
+                    规则网格聚合，将空间划分为固定分辨率的网格并聚合特征
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>结构化表示</li>
+                            <li>易于理解</li>
+                            <li>计算稳定</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>固定分辨率</li>
+                            <li>空网格浪费资源</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #4CAF50;">否</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案④ -->
+            <div class="strategy-card">
+                <div class="strategy-header">
+                    <div class="strategy-title">④ learned</div>
+                    <span class="badge existing">现有</span>
+                </div>
+                <div class="strategy-description">
+                    可学习的Cross-Attention Tokenizer，使用query tokens进行特征聚合
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>端到端学习</li>
+                            <li>灵活自适应</li>
+                            <li>类似TokenLearner</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>需要大量训练</li>
+                            <li>可能过拟合</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #f44336;">是</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案⑤ -->
+            <div class="strategy-card">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑤ multiscale</div>
+                    <span class="badge existing">现有</span>
+                </div>
+                <div class="strategy-description">
+                    多尺度特征融合，从encoder的多个阶段提取并合并特征
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>多尺度信息</li>
+                            <li>层次化表示</li>
+                            <li>适合复杂场景</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>计算成本高</li>
+                            <li>特征分布不一致</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #FF9800;">高</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #4CAF50;">否</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 新提案 -->
+        <h2 style="margin-top: 40px; margin-bottom: 20px;">🆕 新提案（针对抓取任务优化）</h2>
+        <div class="strategies-grid">
+            <!-- 方案⑥ -->
+            <div class="strategy-card new recommended">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑥ surface_aware</div>
+                    <span class="badge recommended">强烈推荐</span>
+                </div>
+                <div class="strategy-description">
+                    <strong>表面感知采样</strong>：计算局部曲率，优先采样高曲率区域（边缘、角落）—— 这些是抓取的关键区域
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li><strong>直接针对抓取任务</strong></li>
+                            <li>保留几何细节</li>
+                            <li>不需要训练</li>
+                            <li>计算高效</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>需要调整阈值</li>
+                            <li>对噪声敏感</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低-中</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #4CAF50;">否</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案⑦ -->
+            <div class="strategy-card new recommended">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑦ hybrid</div>
+                    <span class="badge recommended">强烈推荐</span>
+                </div>
+                <div class="strategy-description">
+                    <strong>混合策略</strong>：50% Grid tokens（全局结构）+ 50% Learned tokens（局部细节）
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li><strong>全局+局部平衡</strong></li>
+                            <li>与Double Stream完美配合</li>
+                            <li>可调节比例</li>
+                            <li>结合结构化和灵活性</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>参数较多</li>
+                            <li>实现稍复杂</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #FF9800;">中</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #FF9800;">部分</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案⑧ -->
+            <div class="strategy-card new recommended">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑧ graspability_guided</div>
+                    <span class="badge recommended">推荐*</span>
+                </div>
+                <div class="strategy-description">
+                    <strong>可抓取性引导</strong>：训练预测器评估每个点的抓取分数，Top-K采样高分区域<br/>
+                    <em>* 需要训练数据</em>
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li><strong>直接优化抓取性能</strong></li>
+                            <li>端到端学习</li>
+                            <li>自动聚焦重要区域</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>需要标注数据</li>
+                            <li>可能过拟合</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #4CAF50;">低</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #f44336;">是</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案⑨ -->
+            <div class="strategy-card new">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑨ hierarchical_attention</div>
+                    <span class="badge new">新提案</span>
+                </div>
+                <div class="strategy-description">
+                    <strong>层次化注意力池化</strong>：多层逐步下采样，类似Set Transformer
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>渐进式抽象</li>
+                            <li>保留多尺度信息</li>
+                            <li>完全可学习</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>计算复杂</li>
+                            <li>参数量大</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #f44336;">高</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #f44336;">是</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 方案⑩ -->
+            <div class="strategy-card new">
+                <div class="strategy-header">
+                    <div class="strategy-title">⑩ adaptive_density</div>
+                    <span class="badge new">新提案</span>
+                </div>
+                <div class="strategy-description">
+                    <strong>自适应密度采样</strong>：预测区域重要性，重要区域分配更多tokens
+                </div>
+                <div class="pros-cons">
+                    <div class="pros">
+                        <div class="pros-title">✅ 优点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>动态资源分配</li>
+                            <li>适应不同复杂度</li>
+                            <li>细节效率平衡</li>
+                        </ul>
+                    </div>
+                    <div class="cons">
+                        <div class="cons-title">❌ 缺点</div>
+                        <ul style="margin-left: 20px;">
+                            <li>实现复杂</li>
+                            <li>需要训练</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-label">适用性</div>
+                        <div class="metric-value stars">⭐⭐⭐⭐</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">计算开销</div>
+                        <div class="metric-value" style="color: #FF9800;">中-高</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-label">需要训练</div>
+                        <div class="metric-value" style="color: #f44336;">是</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 推荐方案 -->
+        <div class="recommendation-box">
+            <h2>💡 实施建议</h2>
+            
+            <div class="recommendation-item">
+                <div class="recommendation-title">🥇 方案一：最小改动，快速验证</div>
+                <p><strong>实现方案⑥ (Surface-Aware)</strong></p>
+                <ul style="margin-left: 25px; margin-top: 10px;">
+                    <li>实现简单（~100行代码）</li>
+                    <li>不需要训练</li>
+                    <li>直接针对抓取任务</li>
+                    <li>可作为其他方案的预处理</li>
+                </ul>
+                <p style="margin-top: 10px;"><code>token_strategy: 'surface_aware'</code></p>
+            </div>
+            
+            <div class="recommendation-item">
+                <div class="recommendation-title">🥈 方案二：最佳效果，平衡性能</div>
+                <p><strong>实现方案⑥ + 方案⑦ (Surface + Hybrid)</strong></p>
+                <ul style="margin-left: 25px; margin-top: 10px;">
+                    <li>两阶段：Surface预筛 (2K候选) → Hybrid精选 (K个tokens)</li>
+                    <li>兼具几何感知和学习能力</li>
+                    <li>全局覆盖 + 局部细节</li>
+                    <li>learned部分更容易训练</li>
+                </ul>
+                <p style="margin-top: 10px;"><code>token_strategy: 'surface_hybrid'</code></p>
+            </div>
+            
+            <div class="recommendation-item">
+                <div class="recommendation-title">🥉 方案三：端到端最优（需要训练数据）</div>
+                <p><strong>实现方案⑧ (Graspability-Guided)</strong></p>
+                <ul style="margin-left: 25px; margin-top: 10px;">
+                    <li>训练抓取性预测器</li>
+                    <li>端到端优化抓取性能</li>
+                    <li>需要成功/失败标注</li>
+                    <li>可与主任务联合训练</li>
+                </ul>
+                <p style="margin-top: 10px;"><code>token_strategy: 'graspability_guided'</code></p>
+            </div>
+        </div>
+        
+        <!-- 对比表格 -->
+        <h2 style="margin-top: 40px; margin-bottom: 20px;">📊 综合对比表</h2>
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>方案</th>
+                    <th>适用性</th>
+                    <th>计算开销</th>
+                    <th>需要训练</th>
+                    <th>几何感知</th>
+                    <th>任务针对性</th>
+                    <th>推荐</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>① last_layer</td>
+                    <td>⭐⭐⭐</td>
+                    <td>低</td>
+                    <td>否</td>
+                    <td>⚠️</td>
+                    <td>❌</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>② fps</td>
+                    <td>⭐⭐⭐</td>
+                    <td>低</td>
+                    <td>否</td>
+                    <td>❌</td>
+                    <td>❌</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>③ grid</td>
+                    <td>⭐⭐</td>
+                    <td>低</td>
+                    <td>否</td>
+                    <td>❌</td>
+                    <td>❌</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>④ learned</td>
+                    <td>⭐⭐⭐⭐</td>
+                    <td>低</td>
+                    <td>是</td>
+                    <td>⚠️</td>
+                    <td>✅</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>⑤ multiscale</td>
+                    <td>⭐⭐⭐⭐</td>
+                    <td>高</td>
+                    <td>否</td>
+                    <td>✅</td>
+                    <td>⚠️</td>
+                    <td>-</td>
+                </tr>
+                <tr class="highlight">
+                    <td><strong>⑥ surface_aware</strong></td>
+                    <td><strong>⭐⭐⭐⭐⭐</strong></td>
+                    <td>低-中</td>
+                    <td>否</td>
+                    <td><strong>✅✅</strong></td>
+                    <td><strong>✅✅</strong></td>
+                    <td><strong>✅</strong></td>
+                </tr>
+                <tr class="highlight">
+                    <td><strong>⑦ hybrid</strong></td>
+                    <td><strong>⭐⭐⭐⭐⭐</strong></td>
+                    <td>中</td>
+                    <td>部分</td>
+                    <td>✅</td>
+                    <td><strong>✅✅</strong></td>
+                    <td><strong>✅</strong></td>
+                </tr>
+                <tr class="highlight">
+                    <td><strong>⑧ graspability</strong></td>
+                    <td><strong>⭐⭐⭐⭐⭐</strong></td>
+                    <td>低</td>
+                    <td>是</td>
+                    <td>⚠️</td>
+                    <td><strong>✅✅✅</strong></td>
+                    <td><strong>✅*</strong></td>
+                </tr>
+                <tr>
+                    <td>⑨ hierarchical</td>
+                    <td>⭐⭐⭐⭐</td>
+                    <td>高</td>
+                    <td>是</td>
+                    <td>✅</td>
+                    <td>✅</td>
+                    <td>-</td>
+                </tr>
+                <tr>
+                    <td>⑩ adaptive</td>
+                    <td>⭐⭐⭐⭐</td>
+                    <td>中-高</td>
+                    <td>是</td>
+                    <td>✅</td>
+                    <td>✅</td>
+                    <td>-</td>
+                </tr>
+            </tbody>
+        </table>
+        <p style="text-align: center; color: #666; margin-top: 10px;">
+            * 方案⑧需要训练数据支持
+        </p>
+        
+        <!-- 实施路线图 -->
+        <div class="implementation-box">
+            <h2>🗺️ 实施路线图</h2>
+            
+            <h3>立即可做（1-2天）</h3>
+            <ul>
+                <li>实现方案⑥ (Surface-Aware) 作为新的token_strategy</li>
+                <li>在现有数据上评估 vs baseline（方案①）</li>
+                <li>可视化token分布和attention热力图</li>
+            </ul>
+            
+            <h3>短期目标（1周）</h3>
+            <ul>
+                <li>实现方案⑦ (Hybrid)</li>
+                <li>消融实验：对比①②③⑥⑦五个策略</li>
+                <li>测试不同超参数（曲率阈值、grid比例等）</li>
+            </ul>
+            
+            <h3>长期目标（2-4周）</h3>
+            <ul>
+                <li>如果有标注数据，实现方案⑧</li>
+                <li>端到端训练grasp score predictor</li>
+                <li>多任务学习：token selection + grasp generation</li>
+                <li>在真实机器人上验证</li>
+            </ul>
+        </div>
+        
+        <div style="text-align: center; margin-top: 40px; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; color: white;">
+            <h2 style="margin-bottom: 15px;">🎉 总结</h2>
+            <p style="font-size: 1.2em; line-height: 1.8;">
+                如果只选一个：<strong>方案⑥ (Surface-Aware)</strong> — 简单、有效、不需要训练<br/>
+                如果选两个：<strong>方案⑥ + ⑦</strong> — 兼具几何感知和学习能力<br/>
+                如果有充足资源：<strong>全部实现并做消融实验</strong> — 找到最适合你数据的方案
+            </p>
+            <p style="margin-top: 20px; font-size: 1.1em;">祝实验顺利！🚀</p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px; color: #999; font-size: 0.9em;">
+            <p>SceneLeapUltra - Scene Token 策略分析</p>
+            <p>详细代码实现见: <code>tests/test_scene_token_strategies.py</code> 和 <code>models/backbone/token_strategies_enhanced.py</code></p>
+        </div>
+    </div>
+</body>
+</html>
+

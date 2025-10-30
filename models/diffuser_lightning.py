@@ -84,6 +84,15 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
         train_log_dict["train/total_loss"] = loss
         self.log_dict(train_log_dict, prog_bar=False, logger=True, on_step=True, on_epoch=True, batch_size=total_samples, sync_dist=True)
 
+        # Step time-aware gating (MLP gate warmup/learning)
+        try:
+            gate = getattr(self.eps_model, 'time_gate', None)
+            if gate is not None:
+                gate.step()
+        except Exception:
+            # 不影响训练流程，安静失败
+            pass
+
         # Log learning rate
         optimizer = self.optimizers()
         self.log("train/lr", optimizer.param_groups[0]['lr'], prog_bar=False, logger=True, on_step=True, batch_size=total_samples, sync_dist=True)
@@ -136,6 +145,75 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
 
         return loss
 
+    def on_after_backward(self) -> None:
+        """Log gradient norms and AdaLNZero forward stats periodically (INFO)."""
+        try:
+            if not self.trainer.is_global_zero:
+                return
+            # 使用 global_step 控制频率，避免 batch_idx 不可用
+            freq = getattr(self, 'print_freq', 50)
+            if int(self.global_step) % max(1, int(freq)) != 0:
+                return
+
+            def _grad_norm(module: nn.Module) -> float:
+                total = 0.0
+                for p in module.parameters():
+                    if p.grad is not None:
+                        g = p.grad.data
+                        total += float(g.norm(2)**2)
+                return total ** 0.5
+
+            # 1) 全局梯度范数
+            global_gn = _grad_norm(self)
+
+            # 2) scene backbone 梯度范数（若存在）
+            scene_gn = 0.0
+            if hasattr(self, 'eps_model') and hasattr(self.eps_model, 'scene_model'):
+                scene_gn = _grad_norm(self.eps_model.scene_model)
+
+            # 3) AdaLNZero 调制层梯度范数（modulation 线性层）
+            adaln_gn = 0.0
+            if hasattr(self, 'eps_model'):
+                for m in self.eps_model.modules():
+                    if hasattr(m, 'modulation'):
+                        for p in m.modulation.parameters():
+                            if p.grad is not None:
+                                adaln_gn += float(p.grad.data.norm(2)**2)
+                adaln_gn = adaln_gn ** 0.5
+
+            # 4) 汇总 AdaLNZero 的前向统计（cond/std、gate、x_mod std）
+            cond_std_mean = None
+            gate_mean = None
+            xmod_std_mean = None
+            valid_layers = 0
+            try:
+                from models.decoder.dit import AdaLNZero  # 延迟导入避免循环
+                for m in self.eps_model.modules():
+                    if isinstance(m, AdaLNZero) and hasattr(m, '_last_stats') and isinstance(m._last_stats, dict):
+                        s = m._last_stats
+                        if s.get('cond_isfinite', True):
+                            valid_layers += 1
+                            cond_std_mean = (0.0 if cond_std_mean is None else cond_std_mean) + float(s.get('cond_std', 0.0))
+                            gate_mean = (0.0 if gate_mean is None else gate_mean) + float(s.get('gate_mean', 0.0))
+                            xmod_std_mean = (0.0 if xmod_std_mean is None else xmod_std_mean) + float(s.get('xmod_std', 0.0))
+                if valid_layers > 0:
+                    cond_std_mean = cond_std_mean / valid_layers
+                    gate_mean = gate_mean / valid_layers
+                    xmod_std_mean = xmod_std_mean / valid_layers
+            except Exception:
+                pass
+
+            logging.info(
+                f"[ddpm_train] ep={self.current_epoch} step={int(self.global_step)} "
+                f"grad(global/scene/adaln)=({global_gn:.2e}/{scene_gn:.2e}/{adaln_gn:.2e}) "
+                f"adaln(cond_std_mean={cond_std_mean if cond_std_mean is not None else 'n/a'}, "
+                f"gate_mean={gate_mean if gate_mean is not None else 'n/a'}, "
+                f"xmod_std_mean={xmod_std_mean if xmod_std_mean is not None else 'n/a'})"
+            )
+        except Exception:
+            # 出错不影响训练
+            pass
+
     def on_validation_epoch_start(self):
         self.validation_step_outputs = []
 
@@ -149,6 +227,32 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
         batch_size = B * num_grasps
 
         loss_dict = self.criterion(pred_dict, batch, mode='val')
+
+        # Compute set metrics
+        set_metrics = {}
+        try:
+            metric_result = self.criterion.compute_set_metrics(pred_dict, batch)
+            if isinstance(metric_result, dict):
+                set_metrics = {k: float(v) for k, v in metric_result.items()}
+                if set_metrics:
+                    self.log_dict({f"val/{k}": v for k, v in set_metrics.items()},
+                                  prog_bar=False, logger=True, on_step=False, on_epoch=True,
+                                  batch_size=batch_size, sync_dist=True)
+        except Exception:
+            pass
+
+        # Compute quality metrics
+        quality_metrics = {}
+        try:
+            quality_result = self.criterion.compute_quality_metrics(pred_dict, batch)
+            if isinstance(quality_result, dict):
+                quality_metrics = {k: float(v) for k, v in quality_result.items()}
+                if quality_metrics:
+                    self.log_dict({f"val/quality/{k}": v for k, v in quality_metrics.items()},
+                                  prog_bar=False, logger=True, on_step=False, on_epoch=True,
+                                  batch_size=batch_size, sync_dist=True)
+        except Exception:
+            pass
 
         # Handle standardized validation loss
         if hasattr(self.criterion, 'use_standardized_val_loss') and self.criterion.use_standardized_val_loss:
@@ -175,7 +279,9 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
                 "standardized_loss": loss.item(),
                 "standard_loss": standard_loss.item(),
                 "loss_dict": {k: v.item() for k, v in loss_dict.items()},
-                "standard_loss_dict": {k: v.item() for k, v in standard_loss_dict.items()}
+                "standard_loss_dict": {k: v.item() for k, v in standard_loss_dict.items()},
+                "set_metrics": set_metrics,
+                "quality_metrics": quality_metrics,
             })
         else:
             # Standard validation loss calculation
@@ -184,7 +290,9 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
 
             self.validation_step_outputs.append({
                 "loss": loss.item(),
-                "loss_dict": {k: v.item() for k, v in loss_dict.items()}
+                "loss_dict": {k: v.item() for k, v in loss_dict.items()},
+                "set_metrics": set_metrics,
+                "quality_metrics": quality_metrics,
             })
 
         return {"loss": loss, "loss_dict": loss_dict}
@@ -224,12 +332,15 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             std_loss_min = min(std_loss) if std_loss else 0.0
             std_loss_max = max(std_loss) if std_loss else 0.0
 
-            # Log validation summary with standardized loss
+            set_metrics = self._aggregate_metrics(self.validation_step_outputs, "set_metrics")
+            quality_metrics = self._aggregate_metrics(self.validation_step_outputs, "quality_metrics")
             log_validation_summary(
                 epoch=self.current_epoch, num_batches=len(self.validation_step_outputs),
                 avg_loss=avg_std_loss, loss_std=std_loss_std,
                 loss_min=std_loss_min, loss_max=std_loss_max,
-                val_detailed_loss=val_detailed_loss
+                val_detailed_loss=val_detailed_loss,
+                val_set_metrics=set_metrics,
+                val_quality_metrics=quality_metrics
             )
 
             # Log standardized validation losses to WandB
@@ -269,10 +380,14 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             loss_min = min(val_loss) if val_loss else 0.0
             loss_max = max(val_loss) if val_loss else 0.0
 
+            set_metrics = self._aggregate_metrics(self.validation_step_outputs, "set_metrics")
+            quality_metrics = self._aggregate_metrics(self.validation_step_outputs, "quality_metrics")
             log_validation_summary(
                 epoch=self.current_epoch, num_batches=num_batches, avg_loss=avg_loss,
                 loss_std=loss_std, loss_min=loss_min, loss_max=loss_max,
-                val_detailed_loss=val_detailed_loss
+                val_detailed_loss=val_detailed_loss,
+                val_set_metrics=set_metrics,
+                val_quality_metrics=quality_metrics
             )
 
             # Log validation losses to WandB with "val/" prefix
@@ -296,6 +411,23 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             self.log('val/lr', current_lr, prog_bar=False, logger=True, on_epoch=True, batch_size=self.batch_size, sync_dist=True)
 
         self.validation_step_outputs.clear()
+
+    @staticmethod
+    def _aggregate_metrics(outputs, key: str) -> Dict[str, float]:
+        aggregated: Dict[str, list] = {}
+        for item in outputs:
+            if not isinstance(item, dict):
+                continue
+            metric_dict = item.get(key)
+            if not isinstance(metric_dict, dict):
+                continue
+            for name, value in metric_dict.items():
+                try:
+                    scalar = float(value)
+                except (TypeError, ValueError):
+                    continue
+                aggregated.setdefault(name, []).append(scalar)
+        return {name: (sum(vals) / len(vals) if vals else 0.0) for name, vals in aggregated.items()}
 
     def on_test_start(self):
         self.metric_results = []
@@ -408,6 +540,8 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
         x_t = self.q_sample(x0=data['norm_pose'], t=ts, noise=noise)
 
         condition = self.eps_model.condition(data)
+        data.update(condition)
+        self._ensure_scene_mask(data)
         data["cond"] = condition
         output = self.eps_model(x_t, ts, data)
 
@@ -424,6 +558,32 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
     # =====================
     # Helper Methods
     # =====================
+
+    @staticmethod
+    def _ensure_scene_mask(batch: Dict) -> None:
+        """Ensure a valid scene_mask tensor exists when scene_cond is provided."""
+        scene_context = batch.get('scene_cond')
+        if scene_context is None or not isinstance(scene_context, torch.Tensor):
+            return
+
+        mask = batch.get('scene_mask')
+        if isinstance(mask, torch.Tensor):
+            if mask.dim() == 3:
+                mask = mask.squeeze(1)
+            if mask.shape == (scene_context.shape[0], scene_context.shape[1]):
+                mask = torch.clamp(
+                    mask.to(scene_context.device, dtype=torch.float32), 0.0, 1.0
+                )
+                batch['scene_mask'] = mask
+                return
+            else:
+                logging.warning(
+                    f"[Scene Mask] Provided scene_mask shape {tuple(mask.shape)} "
+                    f"mismatches scene_cond {scene_context.shape[:2]}, rebuilding full mask."
+                )
+
+        B, N, _ = scene_context.shape
+        batch['scene_mask'] = torch.ones(B, N, device=scene_context.device, dtype=torch.float32)
 
     def _compute_loss(self, batch: Dict, mode: str = 'train') -> Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict]:
         """Unified loss computation logic for training and validation."""
@@ -487,6 +647,7 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             logging.debug(f"[Conditioning] text_cond stats: shape={text_cond.shape}, min={text_cond.min():.6f}, max={text_cond.max():.6f}, mean={text_cond.mean():.6f}")
 
         processed_batch.update(condition_dict)
+        self._ensure_scene_mask(processed_batch)
 
         # Step 5: Forward through model
         logging.debug(f"[Model Forward] Passing through eps_model...")
@@ -517,7 +678,8 @@ class DDPMLightning(DiffusionCoreMixin, pl.LightningModule):
             pred_dict['neg_text_features'] = condition_dict['neg_text_features']
 
         loss_dict = self.criterion(pred_dict, processed_batch, mode=mode)
-        loss = sum(v * self.loss_weights[k] for k, v in loss_dict.items() if k in self.loss_weights)
+        # Aggregate base losses and set loss (if enabled) via criterion helper
+        loss = self.criterion.aggregate_total_loss(loss_dict, base_weights=self.loss_weights)
 
         return loss, loss_dict, processed_batch
 

@@ -28,13 +28,15 @@ def log_validation_summary(epoch: int,
                            loss_std: float,
                            loss_min: float,
                            loss_max: float,
-                           val_detailed_loss: Dict[str, float]) -> None:
+                           val_detailed_loss: Dict[str, float],
+                           val_set_metrics: Dict[str, float] = None,
+                           val_quality_metrics: Dict[str, float] = None) -> None:
     logging.info(f'{GREEN}=== Epoch {epoch} - Validation Results ==={ENDC}')
     logging.info(f'{BLUE}Total validation batches: {num_batches}{ENDC}')
 
     avg_loss_str = f"{avg_loss:.4f}"
-    emoji_loss = convert_number_to_emoji(avg_loss_str)
-    logging.info(f'{BLUE}{"Average Loss:":<21s} {avg_loss_str} {emoji_loss}{ENDC}')
+    # emoji_loss = convert_number_to_emoji(avg_loss_str)  # 注释掉emoji的输出
+    logging.info(f'{BLUE}{"Average Loss:":<21s} {avg_loss_str}{ENDC}')
     logging.info(f'{BLUE}{"Loss Std:":<21s} {loss_std:.4f}{ENDC}')
     logging.info(f'{BLUE}{"Loss Min:":<21s} {loss_min:.4f}{ENDC}')
     logging.info(f'{BLUE}{"Loss Max:":<21s} {loss_max:.4f}{ENDC}')
@@ -42,7 +44,23 @@ def log_validation_summary(epoch: int,
     logging.info(f'{BLUE}--- Detailed Loss Breakdown ---{ENDC}')
     for k, v in val_detailed_loss.items():
         v_str = f"{v:.4f}"
-        emoji_v = convert_number_to_emoji(v_str)
-        logging.info(f'{BLUE}{k.title() + ":":<21s} {v_str} {emoji_v}{ENDC}')
+        # emoji_v = convert_number_to_emoji(v_str)  # 注释掉emoji的输出
+        logging.info(f'{BLUE}{k.title() + ":":<21s} {v_str}{ENDC}')
+
+    # Optional: Set-level metrics
+    if isinstance(val_set_metrics, dict) and len(val_set_metrics) > 0:
+        logging.info(f'{BLUE}--- Set Metrics ---{ENDC}')
+        for k, v in val_set_metrics.items():
+            v_str = f"{v:.4f}"
+            # emoji_v = convert_number_to_emoji(v_str)  # 注释掉emoji的输出
+            logging.info(f'{BLUE}{k + ":":<21s} {v_str}{ENDC}')
+
+    # Optional: Quality metrics (e.g., penetration_penalty, contact_quality)
+    if isinstance(val_quality_metrics, dict) and len(val_quality_metrics) > 0:
+        logging.info(f'{BLUE}--- Quality Metrics ---{ENDC}')
+        for k, v in val_quality_metrics.items():
+            v_str = f"{v:.4f}"
+            # emoji_v = convert_number_to_emoji(v_str)  # 注释掉emoji的输出
+            logging.info(f"{BLUE}{k.replace('_', ' ').title() + ':':<21s} {v_str}{ENDC}")
 
     logging.info(f'{GREEN}=== Validation Summary Complete ==={ENDC}') 

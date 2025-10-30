@@ -1,7 +1,7 @@
 name: ptv3
 variant: light
 use_flash_attention: true
-grid_size: 0.003
+grid_size: 0.02  # 增大grid_size以减少token数量（从0.003->0.02，tokens: 8192->128左右）
 
 # Encoder configuration (lightweight)
 encoder_channels: [32, 64, 128, 256, 512]

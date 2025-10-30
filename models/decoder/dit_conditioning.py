@@ -230,12 +230,57 @@ def prepare_scene_features(
                 f"min={scene_points.min():.6f}, max={scene_points.max():.6f}, mean={scene_points.mean():.6f}"
             )
 
-        _, scene_feat = scene_model(scene_points)
+        # Backbone返回采样后的xyz和特征
+        sampled_xyz, scene_feat = scene_model(scene_points)
         assert_finite(scene_feat, "scene_feat (backbone output)")
-        scene_feat = scene_feat.permute(0, 2, 1).contiguous()
+        
+        # 保存采样后的xyz到data中，供几何偏置使用
+        # sampled_xyz shape: (B, K, 3)，K是采样后的点数
+        data['scene_xyz_sampled'] = sampled_xyz
+        if logger is not None:
+            logger.debug(
+                f"[Conditioning] Sampled xyz saved: shape={tuple(sampled_xyz.shape)}, "
+                f"min={sampled_xyz.min():.6f}, max={sampled_xyz.max():.6f}"
+            )
+        
+        if logger is not None:
+            logger.debug(
+                f"[Conditioning] Raw scene_feat shape: {tuple(scene_feat.shape)}, "
+                f"tokens_last={getattr(scene_model, 'tokens_last', None)}"
+            )
+
+        # Ensure the feature dimension matches the projection input dim
+        projection_in_dim = scene_projection.in_features
+        if scene_feat.dim() != 3:
+            raise DiTConditioningError(
+                f"Backbone scene feature must be 3D tensor, got {scene_feat.dim()}D"
+            )
+        if scene_feat.shape[-1] == projection_in_dim:
+            scene_feat = scene_feat.contiguous()
+        elif scene_feat.shape[1] == projection_in_dim:
+            scene_feat = scene_feat.permute(0, 2, 1).contiguous()
+        else:
+            raise DiTConditioningError(
+                f"Scene feature shape {tuple(scene_feat.shape)} is incompatible with "
+                f"projection input dim {projection_in_dim}"
+            )
+
+        if logger is not None:
+            logger.debug(
+                f"[Conditioning] Scene_feat aligned to projection: shape={tuple(scene_feat.shape)}"
+            )
+
         scene_feat = replace_non_finite(scene_feat)
         scene_feat = scene_projection(scene_feat)
         assert_finite(scene_feat, "scene_feat (projected)")
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            B, K, C = scene_feat.shape
+            logger.info(
+                "[Scene Conditioning] Dense scene features ready: B=%d, K=%d, C=%d",
+                B,
+                K,
+                C,
+            )
         return scene_feat
     except Exception as exc:
         if strict:
@@ -295,13 +340,17 @@ def prepare_text_features(
         )
 
     # Encode positive prompts
-    pos_text_features = text_encoder.encode_positive(positive_prompts)
+    pos_text_outputs = text_encoder.encode_positive(positive_prompts)
+    pos_text_sequence = pos_text_outputs['sequence']  # (B, L_text, d_model)
+    pos_text_pooled = pos_text_outputs['pooled']      # (B, d_model)
+    token_attention_mask = pos_text_outputs['attention_mask']  # (B, L_text)
 
     # Encode negative prompts if available
     neg_text_features: Optional[torch.Tensor] = None
     if use_negative_prompts and data.get('negative_prompts') is not None:
         try:
-            neg_text_features = text_encoder.encode_negative(data['negative_prompts'])
+            neg_outputs = text_encoder.encode_negative(data['negative_prompts'])
+            neg_text_features = neg_outputs['pooled']  # (B, num_neg, d_model)
             if torch.isnan(neg_text_features).any() or torch.isinf(neg_text_features).any():
                 if logger is not None:
                     logger.warning("Negative text features contain non-finite values, disabling negatives")
@@ -321,17 +370,69 @@ def prepare_text_features(
 
     # Process through text processor
     scene_embedding = torch.mean(scene_feat, dim=1) if scene_feat is not None else None
-    pos_text_features_out, neg_pred = text_processor(pos_text_features, neg_text_features, scene_embedding)
+    pos_text_features_out, neg_pred = text_processor(pos_text_pooled, neg_text_features, scene_embedding)
+
+    # Apply dropout mask to pooled/text tokens
+    expanded_dropout_mask_seq = text_mask.unsqueeze(-1)  # (B, 1, 1)
+    text_tokens = pos_text_sequence * expanded_dropout_mask_seq
+    text_token_mask = token_attention_mask * text_mask  # broadcast (B, 1) -> (B, L)
 
     payload: Dict[str, Optional[torch.Tensor]] = {
         'text_cond': pos_text_features_out * text_mask,
         'text_mask': text_mask,
+        'text_tokens': text_tokens,
+        'text_token_mask': text_token_mask,
+        'text_pooled': pos_text_pooled,
     }
     if use_negative_prompts:
         payload.update({
             'neg_pred': neg_pred,
-            'neg_text_features': neg_text_features
+            'neg_text_features': neg_text_features,
         })
     return payload
 
 
+def pool_scene_features(
+    scene_features: torch.Tensor, 
+    scene_mask: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """
+    对场景特征进行带 mask 的均值池化，用于 AdaLN-Zero 多条件融合。
+    
+    Args:
+        scene_features: (B, N_points, d_model) - 场景点云特征
+        scene_mask: (B, N_points) or (B, 1, N_points) - mask for scene padding
+                    1=valid, 0=padding (可选)
+    
+    Returns:
+        pooled: (B, d_model) - 池化后的全局场景特征
+    
+    Examples:
+        >>> scene_feat = torch.randn(4, 1024, 512)  # (B=4, N=1024, D=512)
+        >>> mask = torch.ones(4, 1024)  # 全部有效
+        >>> pooled = pool_scene_features(scene_feat, mask)
+        >>> pooled.shape
+        torch.Size([4, 512])
+    """
+    if scene_mask is not None:
+        # 标准化 mask 的形状
+        if scene_mask.dim() == 3:
+            # (B, 1, N_points) -> (B, N_points)
+            scene_mask = scene_mask.squeeze(1)
+        
+        # 扩展 mask 到特征维度
+        mask_expanded = scene_mask.unsqueeze(-1)  # (B, N_points, 1)
+        
+        # 带 mask 的求和
+        masked_sum = (scene_features * mask_expanded).sum(dim=1)  # (B, d_model)
+        
+        # 有效点数（至少为 1 以避免除零）
+        valid_counts = mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
+        
+        # 均值池化
+        pooled = masked_sum / valid_counts  # (B, d_model)
+    else:
+        # 无 mask 时的简单均值池化
+        pooled = scene_features.mean(dim=1)  # (B, d_model)
+    
+    return pooled

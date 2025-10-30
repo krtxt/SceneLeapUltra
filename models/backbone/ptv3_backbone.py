@@ -15,7 +15,13 @@ import torch.nn as nn
 from .ptv3.ptv3 import PointTransformerV3
 
 
-def convert_to_ptv3_pc_format(coords: torch.Tensor, feat: torch.Tensor = None, grid_size: float = 0.03):
+def convert_to_ptv3_pc_format(
+    coords: torch.Tensor,
+    feat: torch.Tensor = None,
+    grid_size: float = 0.03,
+    lengths: torch.Tensor = None,
+    mask: torch.Tensor = None,
+):
     """
     Convert point cloud to PTv3 input format.
     
@@ -32,12 +38,39 @@ def convert_to_ptv3_pc_format(coords: torch.Tensor, feat: torch.Tensor = None, g
     
     if feat is None:
         feat = torch.ones(B, N, 1, device=device, dtype=coords.dtype)
-    
+
+    # 处理可变长度或掩码（如果提供）
+    if lengths is not None or mask is not None:
+        if mask is not None:
+            lengths = mask.sum(dim=1).to(torch.long)
+        else:
+            lengths = lengths.to(torch.long)
+
+        coord_list = []
+        feat_list = []
+        for b in range(B):
+            Lb = int(lengths[b].item())
+            if mask is not None:
+                valid = mask[b]
+                coord_list.append(coords[b][valid])
+                feat_list.append(feat[b][valid])
+            else:
+                coord_list.append(coords[b, :Lb])
+                feat_list.append(feat[b, :Lb])
+
+        flat_coord = torch.cat(coord_list, dim=0).to(device)
+        flat_feat = torch.cat(feat_list, dim=0).to(device)
+        offset = lengths.cumsum(dim=0)
+    else:
+        flat_coord = coords.reshape(-1, 3).to(device)
+        flat_feat = feat.reshape(-1, feat.shape[-1]).to(device)
+        offset = torch.tensor([N], device=device, dtype=torch.long).repeat(B).cumsum(dim=0)
+
     return {
-        'coord': coords.reshape(-1, 3).to(device),
-        'feat': feat.reshape(-1, feat.shape[-1]).to(device),
+        'coord': flat_coord,
+        'feat': flat_feat,
         'grid_size': grid_size,
-        'offset': torch.tensor([N], device=device, dtype=torch.long).repeat(B).cumsum(dim=0)
+        'offset': offset,
     }
 
 

@@ -43,3 +43,5 @@ bash train_distributed.sh --gpus 4 \
 
 # bash train_distributed.sh --gpus 4 \
 #   save_root="$EXP" resume=true "checkpoint_path=$CKPT" 
+
+#  

@@ -200,7 +200,7 @@ class ObjectCentricGraspDatasetCached(ObjectCentricGraspDataset):
 
     def _build_error_defaults(self) -> Dict[str, Any]:
         return {
-            "scene_pc": torch.zeros((self.max_points, 3), dtype=torch.float32),
+            "scene_pc": torch.zeros((self.max_points, 6), dtype=torch.float32),
             "hand_model_pose": torch.zeros((self.num_grasps, 23), dtype=torch.float32),
             "se3": torch.zeros((self.num_grasps, 4, 4), dtype=torch.float32),
             "positive_prompt": "error_object",

@@ -1,0 +1,128 @@
+# PTv3 Token 策略配置文件
+# 包含5种不同的token选择策略的预设配置
+
+# ==================== 基础配置（所有策略共享） ====================
+base_config: &base_config
+  name: ptv3_sparse
+  use_flash_attention: true
+  grid_size: 0.003  # 推荐使用0.003以获得100%有效token利用率
+  target_num_tokens: 128  # 默认固定为128个tokens
+  token_strategy: last_layer  # 默认策略：速度快、显存低、质量好
+  
+  # Encoder 配置
+  encoder_channels: [32, 64, 128, 256]
+  encoder_depths: [1, 1, 2, 2]
+  encoder_num_head: [2, 4, 8, 16]
+  enc_patch_size: [1024, 1024, 1024, 1024]
+  stride: [2, 2, 2]  # 3个stride对应4个阶段
+  
+  # 输出配置
+  out_dim: 256
+  input_feature_dim: 1
+  mlp_ratio: 2
+
+# ==================== 方案① 直接取最后一层 ====================
+strategy_last_layer:
+  <<: *base_config
+  token_strategy: last_layer
+  
+  # 说明：
+  # - 直接使用encoder最后一层的稀疏输出
+  # - 如果自然稀疏点数 != target_num_tokens，使用FPS调整
+  # - 优点：实现简单，保留完整语义
+  # - 缺点：不同输入可能产生不同数量的自然稀疏点
+
+# ==================== 方案② FPS采样（推荐） ====================
+strategy_fps:
+  <<: *base_config
+  token_strategy: fps
+  
+  # 说明：
+  # - 使用Farthest Point Sampling从encoder输出中采样
+  # - 严格保证输出 target_num_tokens 个点
+  # - 优点：空间分布均匀，固定输出数量
+  # - 推荐用于需要固定长度输入的transformer
+
+# ==================== 方案③ Grid聚合 ====================
+strategy_grid:
+  <<: *base_config
+  token_strategy: grid
+  grid_resolution: [5, 5, 5]  # 5x5x5 = 125 ≈ 128
+  
+  # 说明：
+  # - 将空间划分为规则网格，每个格子聚合特征
+  # - 空网格使用规则中心坐标填充
+  # - 优点：空间结构规整，覆盖均匀
+  # - 适合对空间位置敏感的任务
+  
+  # 网格分辨率建议：
+  # - 128 tokens: 5x5x5 = 125 或 6x6x4 = 144
+  # - 256 tokens: 6x6x7 = 252 或 7x7x5 = 245
+  # - 512 tokens: 8x8x8 = 512
+
+# ==================== 方案④ 学习式Tokenizer ====================
+strategy_learned:
+  <<: *base_config
+  token_strategy: learned
+  
+  # 说明：
+  # - 使用可学习的cross-attention生成tokens
+  # - Query tokens作为可学习参数，attend到encoder特征
+  # - 优点：端到端可学习，语义自适应
+  # - 缺点：需要训练，增加参数量
+  # - 注意：本实现使用随机初始化，未经训练
+
+# ==================== 方案⑤ 多尺度融合 ====================
+strategy_multiscale:
+  <<: *base_config
+  token_strategy: multiscale
+  
+  # 说明：
+  # - 从encoder的多个阶段提取特征并拼接
+  # - 每个阶段使用FPS采样相同数量的点
+  # - 优点：捕获多尺度信息（粗糙到精细）
+  # - 适合需要全局-局部融合的任务
+  
+  # 如果有4个encoder阶段（跳过第0层）：
+  # - 从第1,2,3层各采样 128/3 ≈ 42 个点
+  # - 总共约 126 个tokens（再FPS调整到128）
+
+# ==================== 性能对比测试配置 ====================
+# 用于对比不同配置的性能影响
+
+# 精细配置（更多tokens，计算量大）
+strategy_fps_fine:
+  <<: *base_config
+  token_strategy: fps
+  target_num_tokens: 256
+  grid_size: 0.01  # 更精细的体素化
+
+# 紧凑配置（更少tokens，速度快）
+strategy_fps_compact:
+  <<: *base_config
+  token_strategy: fps
+  target_num_tokens: 64
+  grid_size: 0.03  # 更粗糙的体素化
+
+# ==================== 使用建议 ====================
+# 
+# 1. 通用场景：使用 strategy_fps（方案②）
+#    - 固定输出，稳定可靠
+#    - 空间分布均匀
+# 
+# 2. 结构化场景：使用 strategy_grid（方案③）
+#    - 空间规整，便于理解
+#    - 适合室内场景、网格化任务
+# 
+# 3. 研究项目：使用 strategy_learned（方案④）
+#    - 端到端可学习
+#    - 需要配合下游任务训练
+# 
+# 4. 复杂任务：使用 strategy_multiscale（方案⑤）
+#    - 多尺度信息丰富
+#    - 适合场景理解、跨模态任务
+# 
+# 5. 快速原型：使用 strategy_last_layer（方案①）
+#    - 实现简单，无额外处理
+#    - 适合快速验证想法
+

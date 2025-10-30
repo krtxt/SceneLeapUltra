@@ -1,16 +1,17 @@
 defaults:
   # - backbone: pointnet2
-  - backbone: ptv3_light
+  - backbone: ptv3_sparse
+  # - backbone: ptv3_light
 
 name: dit_fm
 rot_type: ${rot_type}
 pred_mode: velocity  # Flow Matching预测模式: velocity(FM)|epsilon(DDPM)|pose(直接)
 
 # Model architecture (reuse DiT structure)
-d_model: 512
+d_model: 512  # 增加到512以匹配Hunyuan3D-DiT（原来的256太小）
 num_layers: 12
 num_heads: 8
-d_head: 64
+d_head: 64  # 512 / 8 = 64 ✓
 dropout: 0.1
 
 # Sequence configuration
@@ -44,6 +45,11 @@ cross_attention_dropout: 0.0
 ff_mult: 4
 ff_dropout: 0.1
 
+# MLP ratio for parallel single-stream blocks (Hunyuan3D-DiT style)
+# 用于双流+单流架构中的并行单流块
+# 仅在 use_double_stream=true 且 single_block_variant=parallel 时生效
+mlp_ratio: 4.0
+
 # Velocity head
 # 是否在 velocity head 前添加 LayerNorm（默认关闭，便于与现有实验对齐）
 velocity_head_use_layer_norm: false
@@ -61,8 +67,86 @@ enable_memory_efficient_attention: true
 use_gradient_accumulation: false
 memory_fraction: 0.9
 
+# 数值与dtype相关开关
+# enable_safety_checks: 是否启用注意力的数值安全检查（可能触发GPU同步，默认关闭以提升性能）
+# default_dtype: 默认dtype，用于内存估算与策略启发（可选: float32 | float16 | bfloat16）
+enable_safety_checks: false
+default_dtype: float32
+
 # Debug settings
 debug:
   check_nan: true
   log_tensor_stats: false
 
+# AdaLN-Zero 多条件融合配置
+# use_adaln_zero: 是否使用 AdaLN-Zero 多条件调制（默认关闭以保持与原模型兼容）
+# use_scene_pooling: 是否对场景特征进行池化作为条件（在 use_adaln_zero=true 时生效）
+use_adaln_zero: true
+use_scene_pooling: false
+# AdaLN-Zero 调制模式：multi(时间+场景+文本) | simple(仅时间)
+# 当 use_adaln_zero=true 时生效
+adaln_mode: simple
+# 双流-单流混合架构设置
+use_double_stream: true
+num_double_blocks: 4
+single_block_variant: fused_parallel # fused_parallel 
+
+# Text Token 级别特征配置
+# use_text_tokens: 是否在 text cross-attention 中使用 token 级别特征（默认关闭以保持兼容）
+# 当启用时，text cross-attention 将使用 [B, L_text, d_model] 的 token 序列
+# 而不是 [B, 1, d_model] 的 pooled 特征
+use_text_tokens: false
+
+# Geometric Attention Bias 配置
+# use_geometric_bias: 是否在 scene cross-attention 中使用几何注意力偏置（默认关闭）
+# geometric_bias_hidden_dims: MLP隐藏层维度列表
+# geometric_bias_feature_types: 使用的几何特征类型（可选: relative_pos, distance, direction, distance_log）
+use_geometric_bias: false
+# geometric_bias_hidden_dims: [128, 64]
+# geometric_bias_feature_types: ['relative_pos', 'distance']
+geometric_bias_feature_types: ['distance']
+geometric_bias_hidden_dims: [64]
+
+# Global-Local Scene Conditioning 配置（两阶段场景条件）
+# use_global_local_conditioning: 是否使用全局-局部两阶段场景条件（默认关闭以保持兼容）
+# 当启用时，scene_cond 会被处理为：
+#   1. 全局阶段：通过 GlobalScenePool 压缩到 K 个全局 latent
+#   2. 局部阶段：基于抓取平移，从点云选取局部邻域（kNN/球查询）
+use_global_local_conditioning: false
+
+# 全局池化配置（Perceiver-IO 思路）
+global_pool:
+  num_latents: 128  # 全局 latent 数量 K（128~256）
+  num_layers: 1     # latent cross-attn 层数（轻量级）
+  dropout: 0.0      # Dropout 比例
+
+# 局部选择器配置
+local_selector:
+  type: knn         # 选择器类型：knn | ball | deformable（deformable 暂未实现）
+  k: 8            # kNN 的 k 值，或 ball query 的 max_samples
+  radius: 0.05      # 球查询半径（仅 ball 类型有效）
+  stochastic: false # 是否在训练时加入随机扰动（暂未实现）
+
+# 可变形注意力配置（预留，暂未实现）
+deformable:
+  n_points: 4       # 每个查询点的采样点数
+  n_heads: ${model.decoder.num_heads}  # 注意力头数
+  n_levels: 1       # 多尺度层数
+  proj_dim: ${model.decoder.d_model}   # 投影维度
+
+# Time-aware Conditioning 配置
+# use_t_aware_conditioning: 是否启用时间相关的条件门控（默认关闭以保持兼容）
+# 通过时间门控因子 α(t) 动态调节 cross-attention 的影响强度
+# 核心思想：扩散早期施加强约束，后期给模型更多自由度
+# FM路径：ts 已经是连续时间 [0,1]，可直接使用
+use_t_aware_conditioning: false
+t_gate:
+  type: "cos2"  # 门控类型: "cos2" (余弦平方) | "mlp" (可学习MLP)
+  apply_to: "scene"  # 应用范围: "both" (场景+文本) | "scene" | "text"
+  scene_scale: 1.0  # 场景条件的缩放因子
+  text_scale: 1.0   # 文本条件的缩放因子
+  separate_text_gate: false  # 是否为文本条件使用独立的门控
+  # MLP门控专用配置
+  mlp_hidden_dims: [256, 128]  # MLP隐藏层维度
+  init_value: 1.0  # 初始输出值（训练前期固定）
+  warmup_steps: 1000  # 固定输出的步数

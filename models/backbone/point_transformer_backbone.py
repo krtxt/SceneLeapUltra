@@ -11,7 +11,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-from .point_transformer import PointTransformerEnc
+from .point_transformer import PointTransformerBlock, PointTransformerEnc
 
 
 def convert_to_pxo_format(pos: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -122,7 +122,7 @@ class PointTransformerBackbone(nn.Module):
         
         # Build Point Transformer encoder
         self.model = PointTransformerEnc(
-            block=None,  # Will use default PointTransformerBlock
+            block=PointTransformerBlock,
             blocks=[2, 3, 4, 6, 3],  # Default architecture
             c=self.c,
             num_points=self.num_points
@@ -186,4 +186,3 @@ class PointTransformerBackbone(nn.Module):
             feat_dense = feat_dense.permute(0, 2, 1)
         
         return xyz_dense, feat_dense
-

@@ -24,6 +24,9 @@ from models.fm.guidance import \
 from models.fm.paths import add_stochasticity, get_path_fn
 # Flow Matching components
 from models.fm.solvers import integrate_ode as fm_integrate_ode
+# Optimal Transport
+from models.fm.optimal_transport import (SinkhornOT, apply_optimal_matching,
+                                         compute_matching_quality)
 # Import loss and utilities
 from models.loss import GraspLossPose
 from models.utils.log_colors import (BLUE, BOLD, ENDC, GREEN, HEADER, RED,
@@ -122,6 +125,59 @@ class FlowMatchingLightning(pl.LightningModule):
         self.fix_num_grasps = cfg.get('fix_num_grasps', False)
         self.target_num_grasps = cfg.get('target_num_grasps', None)
         
+        # Optimal Transport configs
+        self.ot_cfg = self.fm_cfg.get('optimal_transport', {})
+        self.use_optimal_matching = self.ot_cfg.get('enable', False)
+        self.ot_reg = self.ot_cfg.get('reg', 0.1)
+        self.ot_iters = self.ot_cfg.get('num_iters', 50)
+        self.ot_distance_metric = self.ot_cfg.get('distance_metric', 'euclidean')
+        self.ot_matching_strategy = self.ot_cfg.get('matching_strategy', 'greedy')
+        self.ot_normalize_cost = self.ot_cfg.get('normalize_cost', True)
+        self.ot_start_epoch = self.ot_cfg.get('start_epoch', 0)
+        self.ot_log_freq = self.ot_cfg.get('log_freq', 100)
+
+        # Hybrid coupling (mix OT noise with independent Gaussian noise)
+        hybrid_cfg = self.ot_cfg.get('hybrid_coupling', {})
+        self.use_hybrid_coupling = hybrid_cfg.get('enable', False)
+        self.hybrid_beta = float(hybrid_cfg.get('beta', 0.2))
+
+        if not 0.0 <= self.hybrid_beta <= 1.0:
+            raise ValueError(f"hybrid_coupling.beta must be in [0,1], got {self.hybrid_beta}")
+
+        # Parse component weights for weighted OT（切片使用全局默认）
+        component_weights = None
+
+        if self.ot_distance_metric == 'weighted':
+            # 仅读取权重；切片由 OT 实现内部按全局常量推断
+            component_weights = self.ot_cfg.get('component_weights', {})
+            if not component_weights:
+                raise ValueError(
+                    "distance_metric='weighted' requires 'component_weights' in config"
+                )
+            logging.info(f"{GREEN}Using weighted OT with component weights: {component_weights}{ENDC}")
+
+        # Initialize OT solver if enabled
+        if self.use_optimal_matching:
+            self.ot_solver = SinkhornOT(
+                reg=self.ot_reg,
+                num_iters=self.ot_iters,
+                distance_metric=self.ot_distance_metric,
+                matching_strategy=self.ot_matching_strategy,
+                normalize_cost=self.ot_normalize_cost,
+                component_weights=component_weights,
+            )
+            logging.info(f"{GREEN}Optimal Transport enabled: reg={self.ot_reg}, "
+                        f"iters={self.ot_iters}, metric={self.ot_distance_metric}{ENDC}")
+
+            if self.use_hybrid_coupling:
+                logging.info(f"{GREEN}Hybrid coupling enabled with beta={self.hybrid_beta}{ENDC}")
+        else:
+            self.ot_solver = None
+            logging.info(f"{YELLOW}Optimal Transport disabled (using random index pairing){ENDC}")
+            if self.use_hybrid_coupling:
+                logging.warning(f"{YELLOW}Hybrid coupling requested but OT disabled; "
+                                f"mixing defaults to independent noise.{ENDC}")
+        
         # Training statistics
         self._training_step_outputs = []
         
@@ -154,6 +210,49 @@ class FlowMatchingLightning(pl.LightningModule):
         # Sample noise endpoint x1 ~ N(0, I)
         x1 = torch.randn_like(x0, device=self.device)
         
+        # ========== Optimal Transport Matching ==========
+        # 如果启用OT且达到起始epoch，执行Sinkhorn配对
+        if (self.use_optimal_matching and 
+            self.ot_solver is not None and 
+            self.current_epoch >= self.ot_start_epoch):
+            
+            # 计算最优配对
+            if batch_idx % self.ot_log_freq == 0:
+                # 详细模式：返回配对信息用于日志
+                matchings, ot_info = self.ot_solver(x0, x1, return_info=True)
+                
+                # 记录配对质量
+                batch_total = B * num_grasps
+                self.log("train/ot_matched_dist", ot_info['matched_distance'], 
+                        prog_bar=False, logger=True, on_step=True, batch_size=batch_total, sync_dist=True)
+                self.log("train/ot_random_dist", ot_info['random_distance'], 
+                        prog_bar=False, logger=True, on_step=True, batch_size=batch_total, sync_dist=True)
+                self.log("train/ot_improvement", ot_info['improvement'], 
+                        prog_bar=False, logger=True, on_step=True, batch_size=batch_total, sync_dist=True)
+                
+                if self.trainer.is_global_zero:
+                    logging.info(f"{BLUE}[OT] Epoch {self.current_epoch}, Batch {batch_idx}: "
+                               f"matched_dist={ot_info['matched_distance']:.4f}, "
+                               f"random_dist={ot_info['random_distance']:.4f}, "
+                               f"improvement={ot_info['improvement']:.1f}%{ENDC}")
+            else:
+                # 快速模式：仅返回配对索引
+                matchings = self.ot_solver(x0, x1, return_info=False)
+            
+            # 应用配对：重排序噪声
+            x1 = apply_optimal_matching(x0, x1, matchings)
+
+        # ========== Hybrid Coupling: mix OT noise with independent Gaussian ==========
+        if (self.use_hybrid_coupling and self.use_optimal_matching and
+                self.ot_solver is not None and self.current_epoch >= self.ot_start_epoch):
+            if self.hybrid_beta > 0.0:
+                mix_coeff = math.sqrt(max(1.0 - self.hybrid_beta, 0.0))
+                noise_coeff = math.sqrt(self.hybrid_beta)
+                epsilon = torch.randn_like(x1)
+                x1 = mix_coeff * x1 + noise_coeff * epsilon
+            self.log("train/hybrid_beta", self.hybrid_beta, prog_bar=False, logger=True,
+                     on_step=True, batch_size=B * num_grasps, sync_dist=True)
+        
         # Compute interpolation and target velocity
         # Use FM paths module
         x_t, v_star = self.path_fn(x0, x1, t)
@@ -174,6 +273,7 @@ class FlowMatchingLightning(pl.LightningModule):
         # Compute conditioning features
         condition_dict = self.model.condition(processed_batch)
         processed_batch.update(condition_dict)
+        self._ensure_scene_mask(processed_batch)
         
         # Apply conditioning dropout for CFG training
         if self.use_cfg and self.training:
@@ -221,12 +321,73 @@ class FlowMatchingLightning(pl.LightningModule):
             # Compute additional losses (optional)
             loss_dict = self.criterion(pred_dict, processed_batch, mode='train')
             
-            # Use only MSE loss for now, can integrate other losses later
-            total_loss = loss  # Could add: + sum(v * self.loss_weights[k] for k, v in loss_dict.items() if k != 'noise_loss')
+            # Combine primary FM MSE loss with set-level loss (conservative integration)
+            # Only add set loss contribution to keep velocity MSE as the main objective
+            set_total = self.criterion.get_weighted_set_loss(loss_dict)
+            total_loss = loss + (set_total if torch.is_tensor(set_total) else 0.0)
         else:
             total_loss = loss
             loss_dict = {'velocity_loss': loss}
         
+        # --- Gradient & numerical stability logging (lightweight) ---
+        try:
+            if self.trainer.is_global_zero and (batch_idx % max(1, self.print_freq) == 0):
+                # 1) Parameter grad norms (after backward below we can log again if needed)
+                def _grad_norm(module: nn.Module) -> float:
+                    total = 0.0
+                    for p in module.parameters():
+                        if p.grad is not None:
+                            g = p.grad.data
+                            total += float(g.norm(2)**2)
+                    return total ** 0.5
+                global_gn = _grad_norm(self)
+                scene_gn = _grad_norm(self.model.scene_model) if hasattr(self.model, 'scene_model') else 0.0
+                adaln_gn = 0.0
+                for m in self.model.modules():
+                    if hasattr(m, 'modulation'):
+                        for p in m.modulation.parameters():
+                            if p.grad is not None:
+                                adaln_gn += float(p.grad.data.norm(2)**2)
+                adaln_gn = adaln_gn ** 0.5
+
+                # 2) AdaLNZero forward stats aggregation
+                from models.decoder.dit import AdaLNZero
+                cond_std_mean = None
+                gate_mean = None
+                xmod_std_mean = None
+                valid_layers = 0
+                for m in self.model.modules():
+                    if isinstance(m, AdaLNZero) and hasattr(m, '_last_stats') and isinstance(m._last_stats, dict):
+                        s = m._last_stats
+                        # 仅统计有限值样本
+                        if s.get('cond_isfinite', True):
+                            valid_layers += 1
+                            cond_std_mean = (0.0 if cond_std_mean is None else cond_std_mean) + float(s.get('cond_std', 0.0))
+                            gate_mean = (0.0 if gate_mean is None else gate_mean) + float(s.get('gate_mean', 0.0))
+                            xmod_std_mean = (0.0 if xmod_std_mean is None else xmod_std_mean) + float(s.get('xmod_std', 0.0))
+                if valid_layers > 0:
+                    cond_std_mean = cond_std_mean / valid_layers
+                    gate_mean = gate_mean / valid_layers
+                    xmod_std_mean = xmod_std_mean / valid_layers
+
+                logging.info(
+                    f"[fm_train] ep={self.current_epoch} it={batch_idx} "
+                    f"loss={float(loss.item()):.4f} grad(global/scene/adaln)=({global_gn:.2e}/{scene_gn:.2e}/{adaln_gn:.2e}) "
+                    f"adaln(cond_std_mean={cond_std_mean if cond_std_mean is not None else 'n/a'}, "
+                    f"gate_mean={gate_mean if gate_mean is not None else 'n/a'}, "
+                    f"xmod_std_mean={xmod_std_mean if xmod_std_mean is not None else 'n/a'})"
+                )
+        except Exception:
+            pass
+
+        # Prepare set loss values for logging
+        set_loss_values = {}
+        if isinstance(loss_dict, dict) and getattr(self.criterion, "set_loss_enabled", False):
+            for key in ("set_total", "set_total_raw", "set_cd", "set_ot", "set_repulsion"):
+                value = loss_dict.get(key)
+                if value is not None:
+                    set_loss_values[key] = value
+
         # Logging
         total_samples = B * num_grasps
         train_log_dict = {f"train/{k}": v for k, v in loss_dict.items()}
@@ -236,6 +397,15 @@ class FlowMatchingLightning(pl.LightningModule):
         
         self.log_dict(train_log_dict, prog_bar=False, logger=True, on_step=True, 
                      on_epoch=True, batch_size=total_samples, sync_dist=True)
+        
+        # Step time-aware gating (MLP gate warmup/learning)
+        try:
+            gate = getattr(self.model, 'time_gate', None)
+            if gate is not None:
+                gate.step()
+        except Exception:
+            # 不阻塞训练，安静失败
+            pass
         
         # Log learning rate
         optimizer = self.optimizers()
@@ -249,6 +419,19 @@ class FlowMatchingLightning(pl.LightningModule):
             logging.info(f'{BLUE}{"Mean t:":<21s} {t.mean().item():.4f}{ENDC}')
             logging.info(f'{BLUE}{"||v_pred||:":<21s} {torch.norm(v_pred, dim=-1).mean().item():.4f}{ENDC}')
             logging.info(f'{BLUE}{"||v_star||:":<21s} {torch.norm(v_star, dim=-1).mean().item():.4f}{ENDC}')
+            if getattr(self.criterion, "set_loss_enabled", False) and set_loss_values:
+                logging.info(f'{BLUE}{"--- Set Loss Components ---":<21s}{ENDC}')
+                for key in ("set_total", "set_total_raw", "set_cd", "set_ot", "set_repulsion"):
+                    value = set_loss_values.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, torch.Tensor):
+                        value = float(value.detach().float().mean().item())
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    logging.info(f'{BLUE}{key + ":":<21s} {value:.4f}{ENDC}')
         
         return total_loss
     
@@ -274,6 +457,31 @@ class FlowMatchingLightning(pl.LightningModule):
         
         # Compute validation losses
         loss_dict = self.criterion(pred_dict, batch, mode='val')
+
+        # Compute set/quality metrics once per batch
+        set_metrics = {}
+        quality_metrics = {}
+        try:
+            tmp_metrics = self.criterion.compute_set_metrics(pred_dict, batch)
+            if isinstance(tmp_metrics, dict):
+                set_metrics = {k: float(v) for k, v in tmp_metrics.items()}
+                if set_metrics:
+                    val_metrics_log = {f"val/{k}": v for k, v in set_metrics.items()}
+                    self.log_dict(val_metrics_log, prog_bar=False, logger=True, on_step=False, on_epoch=True,
+                                  batch_size=batch_size, sync_dist=True)
+        except Exception:
+            pass
+
+        try:
+            tmp_quality = self.criterion.compute_quality_metrics(pred_dict, batch)
+            if isinstance(tmp_quality, dict):
+                quality_metrics = {k: float(v) for k, v in tmp_quality.items()}
+                if quality_metrics:
+                    quality_log = {f"val/quality/{k}": v for k, v in quality_metrics.items()}
+                    self.log_dict(quality_log, prog_bar=False, logger=True, on_step=False, on_epoch=True,
+                                  batch_size=batch_size, sync_dist=True)
+        except Exception:
+            pass
 
         # Handle standardized validation loss (align with DDPMLightning)
         if hasattr(self.criterion, 'use_standardized_val_loss') and self.criterion.use_standardized_val_loss:
@@ -307,6 +515,8 @@ class FlowMatchingLightning(pl.LightningModule):
                 "standard_loss": standard_loss.item(),
                 "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
                 "standard_loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in standard_loss_dict.items()},
+                "set_metrics": set_metrics,
+                "quality_metrics": quality_metrics,
             })
         else:
             # Standard validation loss calculation
@@ -320,6 +530,8 @@ class FlowMatchingLightning(pl.LightningModule):
             self.validation_step_outputs.append({
                 "loss": loss.item(),
                 "loss_dict": {k: (v.item() if torch.is_tensor(v) else v) for k, v in loss_dict.items()},
+                "set_metrics": set_metrics,
+                "quality_metrics": quality_metrics,
             })
 
         return {"loss": loss, "loss_dict": loss_dict}
@@ -362,7 +574,8 @@ class FlowMatchingLightning(pl.LightningModule):
             std_loss_min = min(std_loss) if std_loss else 0.0
             std_loss_max = max(std_loss) if std_loss else 0.0
 
-            # Log validation summary (standardized)
+            set_metrics = self._aggregate_metrics(self.validation_step_outputs, "set_metrics")
+            quality_metrics = self._aggregate_metrics(self.validation_step_outputs, "quality_metrics")
             log_validation_summary(
                 epoch=self.current_epoch,
                 num_batches=len(self.validation_step_outputs),
@@ -371,6 +584,8 @@ class FlowMatchingLightning(pl.LightningModule):
                 loss_min=std_loss_min,
                 loss_max=std_loss_max,
                 val_detailed_loss=val_detailed_loss,
+                val_set_metrics=set_metrics,
+                val_quality_metrics=quality_metrics,
             )
 
             # Log standardized validation losses
@@ -405,7 +620,8 @@ class FlowMatchingLightning(pl.LightningModule):
                     if values and not isinstance(values[0], dict):
                         val_detailed_loss[k] = mean(values)
 
-            # Log validation summary (standard)
+            set_metrics = self._aggregate_metrics(self.validation_step_outputs, "set_metrics")
+            quality_metrics = self._aggregate_metrics(self.validation_step_outputs, "quality_metrics")
             log_validation_summary(
                 epoch=self.current_epoch,
                 num_batches=len(self.validation_step_outputs),
@@ -414,6 +630,8 @@ class FlowMatchingLightning(pl.LightningModule):
                 loss_min=min(val_loss) if val_loss else 0.0,
                 loss_max=max(val_loss) if val_loss else 0.0,
                 val_detailed_loss=val_detailed_loss,
+                val_set_metrics=set_metrics,
+                val_quality_metrics=quality_metrics,
             )
 
             # Log to wandb
@@ -426,6 +644,49 @@ class FlowMatchingLightning(pl.LightningModule):
             self.log('val_loss', avg_loss, prog_bar=True, batch_size=self.batch_size, sync_dist=True)
 
         self.validation_step_outputs.clear()
+
+    @staticmethod
+    def _aggregate_metrics(outputs, key: str) -> Dict[str, float]:
+        aggregated: Dict[str, list] = {}
+        for item in outputs:
+            if not isinstance(item, dict):
+                continue
+            metric_dict = item.get(key)
+            if not isinstance(metric_dict, dict):
+                continue
+            for name, value in metric_dict.items():
+                try:
+                    scalar = float(value)
+                except (TypeError, ValueError):
+                    continue
+                aggregated.setdefault(name, []).append(scalar)
+        return {name: (sum(vals) / len(vals) if vals else 0.0) for name, vals in aggregated.items()}
+
+    @staticmethod
+    def _ensure_scene_mask(batch: Dict) -> None:
+        """Ensure scene_mask exists when scene_cond is present."""
+        scene_context = batch.get('scene_cond')
+        if scene_context is None or not isinstance(scene_context, torch.Tensor):
+            return
+
+        mask = batch.get('scene_mask')
+        if isinstance(mask, torch.Tensor):
+            if mask.dim() == 3:
+                mask = mask.squeeze(1)
+            if mask.shape == (scene_context.shape[0], scene_context.shape[1]):
+                mask = torch.clamp(
+                    mask.to(scene_context.device, dtype=torch.float32), 0.0, 1.0
+                )
+                batch['scene_mask'] = mask
+                return
+            else:
+                logging.warning(
+                    f"[Scene Mask] Provided scene_mask shape {tuple(mask.shape)} "
+                    f"mismatches scene_cond {scene_context.shape[:2]}, rebuilding full mask."
+                )
+
+        B, N, _ = scene_context.shape
+        batch['scene_mask'] = torch.ones(B, N, device=scene_context.device, dtype=torch.float32)
     
     # =====================
     # Sampling
@@ -457,6 +718,7 @@ class FlowMatchingLightning(pl.LightningModule):
         # Pre-compute conditioning
         condition_dict = self.model.condition(data)
         data.update(condition_dict)
+        self._ensure_scene_mask(data)
         
         # Generate k samples
         samples = []
@@ -502,8 +764,27 @@ class FlowMatchingLightning(pl.LightningModule):
         if self.trainer is not None and self.trainer.is_global_zero and isinstance(info, dict) and 'stats' in info:
             stats = info['stats']
             try:
-                self.log("sample/nfe", stats.get('nfe', 0), prog_bar=False, logger=True, on_step=False, on_epoch=True)
-                self.log("sample/effective_nfe", stats.get('effective_nfe', 0), prog_bar=False, logger=True, on_step=False, on_epoch=True)
+                nfe = float(stats.get('nfe', 0))
+                effective_nfe = float(stats.get('effective_nfe', 0))
+                batch_sz = int(x1.shape[0] * (x1.shape[1] if x1.dim() > 2 else 1))
+                self.log(
+                    "sample/nfe",
+                    nfe,
+                    prog_bar=False,
+                    logger=True,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=batch_sz,
+                )
+                self.log(
+                    "sample/effective_nfe",
+                    effective_nfe,
+                    prog_bar=False,
+                    logger=True,
+                    on_step=False,
+                    on_epoch=True,
+                    batch_size=batch_sz,
+                )
             except Exception:
                 pass
 
